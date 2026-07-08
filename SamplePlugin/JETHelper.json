@@ -1,0 +1,12 @@
+{
+  "Author": "Ardianell",
+  "Name": "JETHelper",
+  "Punchline": "JP to EN flashcard miner for learners",
+  "Description": "Tool to copy any Japanese word or character to search for a translation and create an Anki Flashcard for later study.",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "sample",
+    "plugin",
+    "goats"
+  ]
+}
