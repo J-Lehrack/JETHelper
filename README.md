@@ -29,6 +29,7 @@ JETHelper is a Dalamud plugin for Japanese learners playing FINAL FANTASY XIV. I
 | `/jetclip` | Process the current clipboard text. |
 | `/jetconfig` | Open hotkey, dictionary, and Anki connection settings. |
 | `/jetcardconfig` | Open Anki field-mapping settings. |
+| `/jetabout` | Open acknowledgements, licences, and bundled data-source information. |
 
 ## Basic use
 
@@ -50,7 +51,15 @@ JETHelper/Assets/Dictionaries/
 
 At runtime, JETHelper first checks its installed plugin assets and then falls back to the custom dictionary folder configured through `/jetconfig`.
 
-The source repository intentionally does not include dictionary ZIP files until their redistribution and attribution requirements have been reviewed. See `JETHelper/Assets/Dictionaries/README.md`.
+JETHelper currently permits only the approved bundled archives `jmdict_english.zip` and `kanjidic_english.zip` to be included in release output. Other compatible dictionaries may be supplied by the user through `/jetconfig` and are never included automatically. See `JETHelper/Assets/Dictionaries/README.md`.
+
+## Dictionary data and acknowledgements
+
+JETHelper bundles Yomitan-compatible versions of **JMdict (English)** and **KANJIDIC/KANJIDIC2 (English)**, whose underlying data is maintained by the Electronic Dictionary Research and Development Group (EDRDG).
+
+See [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md) for dictionary source links, the EDRDG licence page, the Yomitan conversion project, related tools, contributors, and dictionary update information. The same information is available in game through `/jetabout`.
+
+Additional dictionaries selected by users are not distributed by JETHelper and remain subject to their respective terms.
 
 ## Anki setup
 

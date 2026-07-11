@@ -1,15 +1,12 @@
-# Dictionary assets
+# JETHelper dictionary assets
 
-JETHelper reads Yomitan-format dictionary archives from this folder during local development and copies them to the build output.
-
-Core filenames currently expected by the lookup services:
+JETHelper intentionally bundles only these freely available Yomitan-compatible archives:
 
 - `jmdict_english.zip`
 - `kanjidic_english.zip`
-- `kireicake.zip` (optional slang/media definitions)
 
-JETHelper can also inspect compatible frequency and Japanese definition dictionaries placed in the same folder.
+They provide the default English vocabulary and kanji lookup data used by the plugin.
 
-Dictionary ZIP files are intentionally excluded from Git until their redistribution and attribution requirements have been reviewed. Use only dictionaries you obtained legally. Do not commit or distribute an archive merely because it can be imported into Yomitan.
+Do not add personal or third-party dictionary archives to the release allowlist without first deciding that they are appropriate to redistribute. Additional dictionaries should normally be stored in a separate folder and selected through `/jetconfig`.
 
-At runtime, users may point JETHelper to a separate dictionary folder through `/jetconfig`.
+See the repository-level [`ACKNOWLEDGEMENTS.md`](../../../ACKNOWLEDGEMENTS.md) for data-source links, attribution, related projects, and update information.

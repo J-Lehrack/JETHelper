@@ -52,6 +52,8 @@ public class ConfigWindow : Window, IDisposable
         DrawDictionarySettings();
         ImGui.Separator();
         DrawAnkiSettings();
+        ImGui.Separator();
+        DrawAcknowledgementsSettings();
     }
 
     private void DrawHotkeySettings()
@@ -313,6 +315,19 @@ public class ConfigWindow : Window, IDisposable
 
         ImGui.SameLine();
         ImGui.TextDisabled("Also available with /jetcardconfig");
+    }
+
+    private void DrawAcknowledgementsSettings()
+    {
+        ImGui.TextWrapped(
+            "View acknowledgements, licences, bundled dictionary sources, "
+            + "and links to the official project and licence pages.");
+
+        if (ImGui.Button("Open Acknowledgements"))
+            plugin.OpenAcknowledgementsUi();
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("Also available with /jetabout");
     }
 
     /// <summary>

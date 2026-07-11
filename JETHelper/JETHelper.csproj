@@ -24,12 +24,20 @@
         <Content Include="Assets\Dictionaries\jmdict_english.zip"
                  Condition="Exists('Assets\Dictionaries\jmdict_english.zip')">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
             <Visible>false</Visible>
         </Content>
         <Content Include="Assets\Dictionaries\kanjidic_english.zip"
                  Condition="Exists('Assets\Dictionaries\kanjidic_english.zip')">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
             <Visible>false</Visible>
+        </Content>
+
+        <Content Include="..\ACKNOWLEDGEMENTS.md">
+            <Link>ACKNOWLEDGEMENTS.md</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         </Content>
     </ItemGroup>
 </Project>

@@ -10,6 +10,11 @@
 artifacts/
 TestResults/
 
-# Dictionary archives are local development assets until redistribution rights
-# have been reviewed. The folder README remains tracked.
+# Development Plans
+CHECKLIST.md
+
+# Ignore dictionary archives by default. Only explicitly reviewed bundled files
+# are permitted into Git and release output.
 JETHelper/Assets/Dictionaries/*.zip
+!JETHelper/Assets/Dictionaries/jmdict_english.zip
+!JETHelper/Assets/Dictionaries/kanjidic_english.zip

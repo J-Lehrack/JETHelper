@@ -17,22 +17,46 @@ namespace JETHelper;
 /// - Our own services, such as lookup and clipboard handling.
 /// - Our windows, such as the main lookup window and config window.
 /// </summary>
-public sealed class Plugin : IDalamudPlugin
-{
-    // These properties are filled in by Dalamud because of the [PluginService] attribute.
-    // The "null!" tells C# that Dalamud will assign these before we use them.
-    [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
-    [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
-    [PluginService] internal static IClientState ClientState { get; private set; } = null!;
-    [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
-    [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
-    [PluginService] internal static IPluginLog Log { get; private set; } = null!;
-    [PluginService] internal static IKeyState KeyState { get; private set; } = null!;
-    [PluginService] internal static IFramework Framework { get; private set; } = null!;
+public sealed class Plugin : IDalamudPlugin {
+    // These properties are filled in by Dalamud because of the [PluginService]
+    // attribute. The "null!" tells C# that Dalamud will assign these before we
+    // use them.
+    [PluginService]
+    internal static IDalamudPluginInterface PluginInterface {
+        get; private set;
+    } = null!;
+    [PluginService]
+    internal static ICommandManager CommandManager {
+        get; private set;
+    } = null!;
+    [PluginService]
+    internal static IClientState ClientState {
+        get; private set;
+    } = null!;
+    [PluginService]
+    internal static IPlayerState PlayerState {
+        get; private set;
+    } = null!;
+    [PluginService]
+    internal static IDataManager DataManager {
+        get; private set;
+    } = null!;
+    [PluginService]
+    internal static IPluginLog Log {
+        get; private set;
+    } = null!;
+    [PluginService]
+    internal static IKeyState KeyState {
+        get; private set;
+    } = null!;
+    [PluginService]
+    internal static IFramework Framework {
+        get; private set;
+    } = null!;
 
     // Slash commands registered with Dalamud.
-    // /jet opens the main window, or processes text if text follows the command.
-    // /jetlookup always treats the command argument as lookup text.
+    // /jet opens the main window, or processes text if text follows the
+    // command. /jetlookup always treats the command argument as lookup text.
     // /jetclip reads the current clipboard text and processes that.
     // /jetconfig opens the settings window.
     // Shift+Y does the same thing by default through HotkeyService.
@@ -41,11 +65,13 @@ public sealed class Plugin : IDalamudPlugin
     private const string ClipboardCommandName = "/jetclip";
     private const string ConfigCommandName = "/jetconfig";
     private const string CardConfigCommandName = "/jetcardconfig";
+    private const string AcknowledgementsCommandName = "/jetabout";
 
     public Configuration Configuration { get; init; }
 
     // Services are small classes that own specific pieces of logic.
-    // Keeping them separate prevents Plugin.cs from becoming a giant catch-all file.
+    // Keeping them separate prevents Plugin.cs from becoming a giant catch-all
+    // file.
     public LookupService LookupService { get; private set; }
     public ClipboardService ClipboardService { get; } = new();
     public HotkeyService HotkeyService { get; private set; } = null!;
@@ -57,56 +83,83 @@ public sealed class Plugin : IDalamudPlugin
 
     private ConfigWindow ConfigWindow { get; init; }
     private CardConfigWindow CardConfigWindow { get; init; }
+    private AcknowledgementsWindow AcknowledgementsWindow { get; init; }
     private MainWindow MainWindow { get; init; }
 
     public Plugin()
     {
-        // Load saved plugin settings. If no settings exist yet, create defaults.
-        Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        // Load saved plugin settings. If no settings exist yet, create
+        // defaults.
+        Configuration = PluginInterface.GetPluginConfig() as Configuration
+                        ?? new Configuration();
 
-        // Create the lookup pipeline after configuration is loaded so services can read settings
-        // such as the manually configured dictionary folder path.
+        // Create the lookup pipeline after configuration is loaded so services
+        // can read settings such as the manually configured dictionary folder
+        // path.
         LookupService = new LookupService(Configuration);
 
-        // When the configured key combination is pressed, it calls ProcessClipboardText().
-        HotkeyService = new HotkeyService(KeyState, Configuration, ProcessClipboardText);
+        // When the configured key combination is pressed, it calls
+        // ProcessClipboardText().
+        HotkeyService = new HotkeyService(KeyState,
+                                          Configuration,
+                                          ProcessClipboardText);
 
         // Create windows and register them with the window system.
         ConfigWindow = new ConfigWindow(this);
         CardConfigWindow = new CardConfigWindow(ConfigWindow);
+        AcknowledgementsWindow = new AcknowledgementsWindow();
         MainWindow = new MainWindow(this);
 
         WindowSystem.AddWindow(ConfigWindow);
         WindowSystem.AddWindow(CardConfigWindow);
+        WindowSystem.AddWindow(AcknowledgementsWindow);
         WindowSystem.AddWindow(MainWindow);
 
         // Register slash commands with Dalamud.
-        CommandManager.AddHandler(MainCommandName, new CommandInfo(OnMainCommand)
-        {
-            HelpMessage = "Open the JETHelper lookup window. Add text after the command to process it."
-        });
+        CommandManager.AddHandler(
+                  MainCommandName,
+                  new CommandInfo(OnMainCommand) {
+                      HelpMessage = "Open the JETHelper lookup window. Add "
+                                    + "text after the command to process it."
+                  });
 
-        CommandManager.AddHandler(LookupCommandName, new CommandInfo(OnLookupCommand)
-        {
-            HelpMessage = "Process the text after the command. Example: /jetlookup 食べる"
-        });
+        CommandManager.AddHandler(
+                  LookupCommandName,
+                  new CommandInfo(OnLookupCommand) {
+                      HelpMessage = "Process the text after the command. "
+                                    + "Example: /jetlookup 食べる"
+                  });
 
-        CommandManager.AddHandler(ClipboardCommandName, new CommandInfo(OnClipboardCommand)
-        {
-            HelpMessage = "Process the current clipboard text. Example flow: copy Japanese text, then run /jetclip"
-        });
+        CommandManager.AddHandler(
+                  ClipboardCommandName,
+                  new CommandInfo(OnClipboardCommand) {
+                      HelpMessage
+                      = "Process the current clipboard text. Example flow: "
+                        + "copy Japanese text, then run /jetclip"
+                  });
 
-        CommandManager.AddHandler(ConfigCommandName, new CommandInfo(OnConfigCommand)
-        {
-            HelpMessage = "Open the JETHelper settings window."
-        });
+        CommandManager.AddHandler(
+                  ConfigCommandName,
+                  new CommandInfo(OnConfigCommand) {
+                      HelpMessage = "Open the JETHelper settings window."
+                  });
 
-        CommandManager.AddHandler(CardConfigCommandName, new CommandInfo(OnCardConfigCommand)
-        {
-            HelpMessage = "Open the JETHelper Anki card field-mapping window."
-        });
+        CommandManager.AddHandler(
+                  CardConfigCommandName,
+                  new CommandInfo(OnCardConfigCommand) {
+                      HelpMessage
+                      = "Open the JETHelper Anki card field-mapping window."
+                  });
 
-        // Tell Dalamud what to call when UI is drawn or when the user opens plugin UI/config.
+        CommandManager.AddHandler(
+                  AcknowledgementsCommandName,
+                  new CommandInfo(OnAcknowledgementsCommand) {
+                      HelpMessage = "Open JETHelper acknowledgements, "
+                                    + "licences, and data-source information."
+                  });
+
+        // Tell Dalamud what to call when UI is drawn or when the user opens
+        // plugin UI/config.
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi += ToggleConfigUi;
         PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
@@ -120,8 +173,9 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
-        // Anything we subscribe/register in the constructor should be unsubscribed/unregistered here.
-        // This helps avoid stale event handlers after plugin reloads.
+        // Anything we subscribe/register in the constructor should be
+        // unsubscribed/unregistered here. This helps avoid stale event handlers
+        // after plugin reloads.
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
@@ -131,6 +185,7 @@ public sealed class Plugin : IDalamudPlugin
 
         ConfigWindow.Dispose();
         CardConfigWindow.Dispose();
+        AcknowledgementsWindow.Dispose();
         MainWindow.Dispose();
         AnkiService.Dispose();
 
@@ -139,6 +194,7 @@ public sealed class Plugin : IDalamudPlugin
         CommandManager.RemoveHandler(ClipboardCommandName);
         CommandManager.RemoveHandler(ConfigCommandName);
         CommandManager.RemoveHandler(CardConfigCommandName);
+        CommandManager.RemoveHandler(AcknowledgementsCommandName);
     }
 
     private void OnFrameworkUpdate(IFramework framework)
@@ -150,8 +206,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         // If the user typed "/jet 食べる", process the argument directly.
         // If they typed only "/jet", open/close the lookup window.
-        if (!string.IsNullOrWhiteSpace(args))
-        {
+        if (!string.IsNullOrWhiteSpace(args)) {
             ProcessLookupText(args);
             return;
         }
@@ -179,30 +234,41 @@ public sealed class Plugin : IDalamudPlugin
         OpenCardConfigUi();
     }
 
+    private void OnAcknowledgementsCommand(string command, string args)
+    {
+        OpenAcknowledgementsUi();
+    }
+
     /// <summary>
-    /// Processes any raw string as lookup text, updates the main window, and opens it.
-    /// This is the central path used by commands, buttons, and later hotkeys.
+    /// Processes any raw string as lookup text, updates the main window, and
+    /// opens it. This is the central path used by commands, buttons, and later
+    /// hotkeys.
     /// </summary>
     public void ProcessLookupText(string? text)
     {
-        var result = LookupService.ProcessRawText(text, source: "Manual/command input");
+        var result = LookupService.ProcessRawText(
+                  text, source: "Manual/command input");
         MainWindow.SetLookupResult(result);
         MainWindow.IsOpen = true;
     }
 
     /// <summary>
     /// Reads text from the clipboard only when the user explicitly requests it.
-    /// We do not constantly monitor the clipboard, and we do not modify clipboard contents.
+    /// We do not constantly monitor the clipboard, and we do not modify
+    /// clipboard contents.
     /// </summary>
     public void ProcessClipboardText()
     {
         var clipboardText = ClipboardService.GetText();
-        var result = LookupService.ProcessRawText(clipboardText, source: "Clipboard");
+        var result = LookupService.ProcessRawText(clipboardText,
+                                                  source: "Clipboard");
         MainWindow.SetLookupResult(result);
         MainWindow.IsOpen = true;
     }
 
     public void ToggleConfigUi() => ConfigWindow.Toggle();
     public void OpenCardConfigUi() => CardConfigWindow.IsOpen = true;
+    public void
+    OpenAcknowledgementsUi() => AcknowledgementsWindow.IsOpen = true;
     public void ToggleMainUi() => MainWindow.Toggle();
 }
