@@ -5,8 +5,11 @@
   "Description": "Tool to copy any Japanese word or character to search for a translation and create an Anki Flashcard for later study.",
   "ApplicableVersion": "any",
   "Tags": [
-    "sample",
+    "jet",
     "plugin",
-    "goats"
+    "japanese",
+    "english",
+    "anki",
+    "translation"
   ]
 }

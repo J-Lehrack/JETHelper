@@ -1,0 +1,12 @@
+# Keep repository diffs predictable across Windows and Linux.
+* text=auto eol=lf
+
+# Visual Studio solution files conventionally use CRLF.
+*.sln text eol=crlf
+
+# Binary assets.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.zip binary

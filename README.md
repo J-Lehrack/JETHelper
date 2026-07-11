@@ -1,78 +1,101 @@
-> ⚠️ **Don't click Fork!**
-> 
-> This is a GitHub Template repo. If you want to use this for a plugin, [use this template][new-repo] to make a new repo!
->
-> ![image](https://github.com/goatcorp/SamplePlugin/assets/16760685/d9732094-e1ed-4769-a70b-58ed2b92580c)
+# JETHelper
 
-# SamplePlugin
+JETHelper is a Dalamud plugin for Japanese learners playing FINAL FANTASY XIV. It turns copied or manually entered Japanese text into vocabulary and kanji lookup results, then sends selected entries to configurable Anki decks through AnkiConnect.
 
-[![Use This Template badge](https://img.shields.io/badge/Use%20This%20Template-0?logo=github&labelColor=grey)][new-repo]
+> **Project status:** Functional alpha. The core lookup-to-Anki workflow works, but installation, dictionary distribution, deinflection, candidate ranking, and media fields still need refinement before a general release.
 
+## Current features
 
-Simple example plugin for Dalamud.
+- Manual Japanese text lookup through the in-game window or slash commands.
+- Explicit clipboard lookup through a configurable keyboard shortcut.
+- Vocabulary and individual-kanji candidates that preserve the original sentence context.
+- English, Japanese, slang/media, frequency, reading, and stroke data when supported dictionaries provide it.
+- Configurable vocabulary and kanji decks, note types, and field mappings.
+- Anki card creation through AnkiConnect, including duplicate prevention and required-field validation.
+- Persistent plugin settings through Dalamud.
 
-This is not designed to be the simplest possible example, but it is also not designed to cover everything you might want to do. For more detailed questions, come ask in [the Discord](https://discord.gg/holdshift).
+## Requirements
 
-## Main Points
+- FINAL FANTASY XIV launched through XIVLauncher with Dalamud enabled.
+- Compatible Yomitan-format dictionary archives.
+- Anki Desktop with the AnkiConnect add-on for card creation. Dictionary lookup itself does not require Anki.
 
-* Simple functional plugin
-  * Slash command
-  * Main UI
-  * Settings UI
-  * Image loading
-  * Plugin json
-* Simple, slightly-improved plugin configuration handling
-* Project organization
-  * Copies all necessary plugin files to the output directory
-    * Does not copy dependencies that are provided by dalamud
-    * Output directory can be zipped directly and have exactly what is required
-  * Hides data files from visual studio to reduce clutter
-    * Also allows having data files in different paths than VS would usually allow if done in the IDE directly
+## Commands
 
+| Command | Purpose |
+| --- | --- |
+| `/jet` | Open or close the lookup window. Text after the command is processed immediately. |
+| `/jetlookup <text>` | Process Japanese text directly. |
+| `/jetclip` | Process the current clipboard text. |
+| `/jetconfig` | Open hotkey, dictionary, and Anki connection settings. |
+| `/jetcardconfig` | Open Anki field-mapping settings. |
 
-The intention is less that any of this is used directly in other projects, and more to show how similar things can be done.
+## Basic use
 
-## How To Use
+1. Copy Japanese text from the FFXIV chat log, or type text into the JETHelper lookup window.
+2. Trigger the configured clipboard hotkey, run `/jetclip`, or click **Process Clipboard**.
+3. Select a vocabulary or kanji candidate.
+4. Review the available dictionary data.
+5. Click **Add Vocab Card** or **Add Kanji Card** after configuring AnkiConnect.
 
-### Getting Started
+Dalamud normally restricts plugin windows during some in-game cutscenes. Enable Dalamud's setting that allows plugin UI during cutscenes if you want to use JETHelper while story dialogue is playing.
 
-To begin, [clone this template repository][new-repo] to your own GitHub account. This will automatically bring in everything you need to get a jumpstart on development. You do not need to fork this repository unless you intend to contribute modifications to it.
+## Dictionary setup
 
-Be sure to also check out the [Dalamud Developer Docs][dalamud-docs] for helpful information about building your own plugin. The Developer Docs includes helpful information about all sorts of things, including [how to submit][submit] your newly-created plugin to the official repository. Assuming you use this template repository, the provided project build configuration and license are already chosen to make everything a breeze.
+During development, place legally obtained dictionary ZIP files in:
 
-[new-repo]: https://github.com/new?template_name=SamplePlugin&template_owner=goatcorp
-[dalamud-docs]: https://dalamud.dev
-[submit]: https://dalamud.dev/plugin-publishing/submission
+```text
+JETHelper/Assets/Dictionaries/
+```
 
-### Prerequisites
+At runtime, JETHelper first checks its installed plugin assets and then falls back to the custom dictionary folder configured through `/jetconfig`.
 
-SamplePlugin assumes all the following prerequisites are met:
+The source repository intentionally does not include dictionary ZIP files until their redistribution and attribution requirements have been reviewed. See `JETHelper/Assets/Dictionaries/README.md`.
 
-* XIVLauncher, FINAL FANTASY XIV, and Dalamud have all been installed and the game has been run with Dalamud at least once.
-* XIVLauncher is installed to its default directories and configurations.
-  * If a custom path is required for Dalamud's dev directory, it must be set with the `DALAMUD_HOME` environment variable.
-* A .NET Core 8 SDK has been installed and configured, or is otherwise available. (In most cases, the IDE will take care of this.)
+## Anki setup
 
-### Building
+1. Install and enable AnkiConnect in Anki Desktop.
+2. Keep Anki open while using card-export features.
+3. Open `/jetconfig` and refresh the AnkiConnect connection.
+4. Select vocabulary and kanji decks and note types.
+5. Open `/jetcardconfig` to map JETHelper data roles to your existing Anki fields.
 
-1. Open up `SamplePlugin.sln` in your C# editor of choice (likely [Visual Studio](https://visualstudio.microsoft.com) or [JetBrains Rider](https://www.jetbrains.com/rider/)).
-2. Build the solution. By default, this will build a `Debug` build, but you can switch to `Release` in your IDE.
-3. The resulting plugin can be found at `SamplePlugin/bin/x64/Debug/SamplePlugin.dll` (or `Release` if appropriate.)
+JETHelper does not modify the styling of existing note types. Bundled optional templates and styling are planned for a later phase.
 
-### Activating in-game
+## Privacy and network behavior
 
-1. Launch the game and use `/xlsettings` in chat or `xlsettings` in the Dalamud Console to open up the Dalamud settings.
-    * In here, go to `Experimental`, and add the full path to the `SamplePlugin.dll` to the list of Dev Plugin Locations.
-2. Next, use `/xlplugins` (chat) or `xlplugins` (console) to open up the Plugin Installer.
-    * In here, go to `Dev Tools > Installed Dev Plugins`, and the `SamplePlugin` should be visible. Enable it.
-3. You should now be able to use `/pmycommand` (chat) or `pmycommand` (console)!
+- Clipboard text is read only when the user explicitly triggers a lookup.
+- Dictionary lookups are performed locally from the configured archives.
+- Anki requests use the configured AnkiConnect address, which defaults to `http://127.0.0.1:8765`.
 
-Note that you only need to add it to the Dev Plugin Locations once (Step 1); it is preserved afterwards. You can disable, enable, or load your plugin on startup through the Plugin Installer.
+## Known limitations
 
-### Reconfiguring for your own uses
+- Deinflection currently handles only a limited set of common conjugations.
+- Vocabulary candidate detection is intentionally permissive and may show substring matches.
+- Audio, pitch-accent diagrams, and kanji stroke diagrams are not yet populated.
+- AnkiConnect requests are currently synchronous and can cause a brief stutter when Anki is unavailable.
+- Direct reading of selected chat text is not implemented; the current workflow uses copied text.
 
-Replace all references to `SamplePlugin` in all the files and filenames with your desired name, then start building the plugin of your dreams. You'll figure it out 😁
+## Building from source
 
-Dalamud will load the JSON file (by default, `SamplePlugin/SamplePlugin.json`) next to your DLL and use it for metadata, including the description for your plugin in the Plugin Installer. Make sure to update this with information relevant to _your_ plugin!
+JETHelper targets Dalamud API 15 and .NET 10.
 
-All participation in this repository is governed by our [Code of Conduct](https://dalamud.dev/code-of-conduct). If you used AI tooling at any point, review the [AI Usage Policy](https://dalamud.dev/plugin-publishing/ai-policy) and disclose your level of AI use. Entirely AI-generated submissions will be rejected, and undisclosed AI use may result in a ban.
+1. Install the .NET 10 SDK and a compatible Visual Studio or Rider version.
+2. Clone the repository.
+3. Add any local dictionary archives under `JETHelper/Assets/Dictionaries/`.
+4. Open `JETHelper.sln` and build the `Debug` or `Release` configuration.
+5. Add the resulting `JETHelper.dll` as a Dalamud development plugin.
+
+Typical debug output:
+
+```text
+JETHelper/bin/x64/Debug/JETHelper.dll
+```
+
+## Roadmap
+
+Near-term work includes optional JETHelper Anki templates/CSS, stronger deinflection, better candidate ranking, and release-safe dictionary installation.
+
+## License
+
+JETHelper source code is licensed under the GNU Affero General Public License v3.0 or later. Third-party dictionaries and other data files retain their own licenses and are not covered by the JETHelper source-code license.

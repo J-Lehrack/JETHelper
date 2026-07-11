@@ -1,4 +1,15 @@
+# Visual Studio / JetBrains
 .vs/
-obj/
-bin/
+.idea/
 *.user
+*.suo
+
+# .NET build output
+**/bin/
+**/obj/
+artifacts/
+TestResults/
+
+# Dictionary archives are local development assets until redistribution rights
+# have been reviewed. The folder README remains tracked.
+JETHelper/Assets/Dictionaries/*.zip

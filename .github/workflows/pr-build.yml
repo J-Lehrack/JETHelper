@@ -1,39 +1,36 @@
-name: Sample PR Builder for SamplePlugin
+name: JETHelper CI
 
 on:
+  push:
+    branches: [ master ]
   pull_request:
     branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-
   build:
     runs-on: windows-2022
 
-    env:
-      Solution_Name: SamplePlugin
-
     steps:
-    - name: Checkout
-      uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@v5
 
-    - name: Install .NET
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: 10.0.x
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
 
-    - name: Download Dalamud
-      run: |
-        Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
-        Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+      - name: Download Dalamud development files
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
+          Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
 
-    - name: Build with dotnet
-      run: dotnet build --configuration Release
+      - name: Restore locked dependencies
+        run: dotnet restore JETHelper.sln --locked-mode
 
-    - name: Store artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: SamplePlugin
-        path: .\SamplePlugin\bin\x64\Release\SamplePlugin\*
-        if-no-files-found: error
-        retention-days: 1
-
+      - name: Build Release
+        run: dotnet build JETHelper.sln --configuration Release --no-restore

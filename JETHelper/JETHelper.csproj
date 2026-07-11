@@ -1,16 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
-  <PropertyGroup>
-    <Version>0.0.0.1</Version>
-    <PackageProjectUrl>https://github.com/goatcorp/SamplePlugin</PackageProjectUrl>
-    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
-    <IsPackable>false</IsPackable>
-  </PropertyGroup>
+    <PropertyGroup>
+        <Version>0.1.0.0</Version>
+        <AssemblyName>JETHelper</AssemblyName>
+        <RootNamespace>JETHelper</RootNamespace>
+        <Authors>Ardianell</Authors>
+        <Description>Japanese dictionary lookup and configurable Anki card creation for Final Fantasy XIV.</Description>
+        <PackageProjectUrl>https://github.com/J-Lehrack/JETHelper</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/J-Lehrack/JETHelper</RepositoryUrl>
+        <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
 
-  <ItemGroup>
-    <Content Include="..\Data\goat.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Visible>false</Visible>
-    </Content>
-  </ItemGroup>
+    <!--
+      Only explicitly approved redistributable dictionaries may be copied into
+      build output. Personal/user-supplied dictionaries belong in the configured
+      external folder and must never be added to this wildcard-free list.
+
+      The Exists conditions keep source/CI builds working before these optional
+      release assets have been placed locally.
+    -->
+    <ItemGroup>
+        <Content Include="Assets\Dictionaries\jmdict_english.zip"
+                 Condition="Exists('Assets\Dictionaries\jmdict_english.zip')">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Visible>false</Visible>
+        </Content>
+        <Content Include="Assets\Dictionaries\kanjidic_english.zip"
+                 Condition="Exists('Assets\Dictionaries\kanjidic_english.zip')">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Visible>false</Visible>
+        </Content>
+    </ItemGroup>
 </Project>
