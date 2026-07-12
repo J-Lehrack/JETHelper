@@ -27,6 +27,14 @@ public class Configuration : IPluginConfiguration
     public string AnkiConnectUrl { get; set; } = "http://127.0.0.1:8765";
 
     /// <summary>
+    /// Writes structured troubleshooting information to JETHelper.log in the
+    /// Dalamud plugin configuration directory. Lookup text remains private
+    /// unless the user separately enables DiagnosticIncludeLookupText.
+    /// </summary>
+    public bool DiagnosticLoggingEnabled { get; set; } = true;
+    public bool DiagnosticIncludeLookupText { get; set; } = false;
+
+    /// <summary>
     /// Exact Anki deck and note type names selected from AnkiConnect.
     /// They intentionally start empty because other users will not have the
     /// developer's personal decks or note types.

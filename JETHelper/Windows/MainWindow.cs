@@ -1,7 +1,8 @@
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
-using JETHelper.Models;
-using JETHelper.Utils;
+using JETHelper.Dictionaries.Models;
+using JETHelper.Lookup;
+using JETHelper.Lookup.Models;
 using System;
 using System.Linq;
 using System.Numerics;

@@ -18,3 +18,8 @@ CHECKLIST.md
 JETHelper/Assets/Dictionaries/*.zip
 !JETHelper/Assets/Dictionaries/jmdict_english.zip
 !JETHelper/Assets/Dictionaries/kanjidic_english.zip
+
+# Dev tools to assist in debugging and testing.
+DevTools/DictionaryTestGenerator/generated/
+__pycache__/
+*.pyc

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
-using JETHelper.Services;
 
 namespace JETHelper.Windows;
 

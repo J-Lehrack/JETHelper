@@ -30,6 +30,7 @@ JETHelper is a Dalamud plugin for Japanese learners playing FINAL FANTASY XIV. I
 | `/jetconfig` | Open hotkey, dictionary, and Anki connection settings. |
 | `/jetcardconfig` | Open Anki field-mapping settings. |
 | `/jetabout` | Open acknowledgements, licences, and bundled data-source information. |
+| `/jetdebug` | Open service health, recent diagnostic events, and local log controls. |
 
 ## Basic use
 
@@ -76,6 +77,11 @@ JETHelper does not modify the styling of existing note types. Bundled optional t
 - Clipboard text is read only when the user explicitly triggers a lookup.
 - Dictionary lookups are performed locally from the configured archives.
 - Anki requests use the configured AnkiConnect address, which defaults to `http://127.0.0.1:8765`.
+- JETHelper can write a local troubleshooting log in its Dalamud configuration folder. Lookup text is excluded by default and is included only when the user explicitly enables that diagnostic option.
+
+## Diagnostics and bug reports
+
+Use `/jetdebug` to view dictionary-service health, recent structured events, and the location of `JETHelper.log`. The log records dictionary discovery, load failures, lookup timings, and AnkiConnect failures. It is intended for troubleshooting and GitHub issue reports rather than normal lookup use.
 
 ## Known limitations
 

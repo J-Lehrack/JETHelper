@@ -3,8 +3,12 @@ using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
-using JETHelper.Services;
 using JETHelper.Windows;
+using JETHelper.Anki.Services;
+using JETHelper.Diagnostics.Windows;
+using JETHelper.Diagnostics.Services;
+using JETHelper.Lookup.Services;
+using JETHelper.Input;
 
 namespace JETHelper;
 
@@ -66,16 +70,18 @@ public sealed class Plugin : IDalamudPlugin {
     private const string ConfigCommandName = "/jetconfig";
     private const string CardConfigCommandName = "/jetcardconfig";
     private const string AcknowledgementsCommandName = "/jetabout";
+    private const string DiagnosticsCommandName = "/jetdebug";
 
     public Configuration Configuration { get; init; }
 
     // Services are small classes that own specific pieces of logic.
     // Keeping them separate prevents Plugin.cs from becoming a giant catch-all
     // file.
+    public DiagnosticService DiagnosticService { get; private set; }
     public LookupService LookupService { get; private set; }
     public ClipboardService ClipboardService { get; } = new();
     public HotkeyService HotkeyService { get; private set; } = null!;
-    public AnkiService AnkiService { get; } = new();
+    public AnkiService AnkiService { get; private set; }
 
     // WindowSystem is Dalamud's manager for plugin windows.
     // We add our windows to it once, then Dalamud asks it to draw every frame.
@@ -84,6 +90,7 @@ public sealed class Plugin : IDalamudPlugin {
     private ConfigWindow ConfigWindow { get; init; }
     private CardConfigWindow CardConfigWindow { get; init; }
     private AcknowledgementsWindow AcknowledgementsWindow { get; init; }
+    private DiagnosticsWindow DiagnosticsWindow { get; init; }
     private MainWindow MainWindow { get; init; }
 
     public Plugin()
@@ -93,10 +100,18 @@ public sealed class Plugin : IDalamudPlugin {
         Configuration = PluginInterface.GetPluginConfig() as Configuration
                         ?? new Configuration();
 
+        // Diagnostics are created before the lookup pipeline so dictionary
+        // discovery, loading, and later services can record technical details
+        // without exposing them in normal user-facing messages.
+        DiagnosticService = new DiagnosticService(Configuration,
+                                                  PluginInterface,
+                                                  Log);
+
         // Create the lookup pipeline after configuration is loaded so services
         // can read settings such as the manually configured dictionary folder
         // path.
-        LookupService = new LookupService(Configuration);
+        LookupService = new LookupService(Configuration, DiagnosticService);
+        AnkiService = new AnkiService(DiagnosticService);
 
         // When the configured key combination is pressed, it calls
         // ProcessClipboardText().
@@ -108,11 +123,13 @@ public sealed class Plugin : IDalamudPlugin {
         ConfigWindow = new ConfigWindow(this);
         CardConfigWindow = new CardConfigWindow(ConfigWindow);
         AcknowledgementsWindow = new AcknowledgementsWindow();
+        DiagnosticsWindow = new DiagnosticsWindow(this);
         MainWindow = new MainWindow(this);
 
         WindowSystem.AddWindow(ConfigWindow);
         WindowSystem.AddWindow(CardConfigWindow);
         WindowSystem.AddWindow(AcknowledgementsWindow);
+        WindowSystem.AddWindow(DiagnosticsWindow);
         WindowSystem.AddWindow(MainWindow);
 
         // Register slash commands with Dalamud.
@@ -158,6 +175,14 @@ public sealed class Plugin : IDalamudPlugin {
                                     + "licences, and data-source information."
                   });
 
+        CommandManager.AddHandler(
+                  DiagnosticsCommandName,
+                  new CommandInfo(OnDiagnosticsCommand) {
+                      HelpMessage
+                      = "Open JETHelper diagnostics, service health, "
+                        + "and local log controls."
+                  });
+
         // Tell Dalamud what to call when UI is drawn or when the user opens
         // plugin UI/config.
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
@@ -186,8 +211,10 @@ public sealed class Plugin : IDalamudPlugin {
         ConfigWindow.Dispose();
         CardConfigWindow.Dispose();
         AcknowledgementsWindow.Dispose();
+        DiagnosticsWindow.Dispose();
         MainWindow.Dispose();
         AnkiService.Dispose();
+        DiagnosticService.Dispose();
 
         CommandManager.RemoveHandler(MainCommandName);
         CommandManager.RemoveHandler(LookupCommandName);
@@ -195,6 +222,7 @@ public sealed class Plugin : IDalamudPlugin {
         CommandManager.RemoveHandler(ConfigCommandName);
         CommandManager.RemoveHandler(CardConfigCommandName);
         CommandManager.RemoveHandler(AcknowledgementsCommandName);
+        CommandManager.RemoveHandler(DiagnosticsCommandName);
     }
 
     private void OnFrameworkUpdate(IFramework framework)
@@ -239,6 +267,11 @@ public sealed class Plugin : IDalamudPlugin {
         OpenAcknowledgementsUi();
     }
 
+    private void OnDiagnosticsCommand(string command, string args)
+    {
+        OpenDiagnosticsUi();
+    }
+
     /// <summary>
     /// Processes any raw string as lookup text, updates the main window, and
     /// opens it. This is the central path used by commands, buttons, and later
@@ -270,5 +303,6 @@ public sealed class Plugin : IDalamudPlugin {
     public void OpenCardConfigUi() => CardConfigWindow.IsOpen = true;
     public void
     OpenAcknowledgementsUi() => AcknowledgementsWindow.IsOpen = true;
+    public void OpenDiagnosticsUi() => DiagnosticsWindow.IsOpen = true;
     public void ToggleMainUi() => MainWindow.Toggle();
 }

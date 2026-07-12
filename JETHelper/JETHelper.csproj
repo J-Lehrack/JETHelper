@@ -11,6 +11,10 @@
         <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
         <IsPackable>false</IsPackable>
     </PropertyGroup>
+    <ItemGroup>
+      <Compile Remove="Assets\Dictionaries\**" />
+      <EmbeddedResource Remove="Assets\Dictionaries\**" />
+    </ItemGroup>
 
     <!--
       Only explicitly approved redistributable dictionaries may be copied into
@@ -21,14 +25,12 @@
       release assets have been placed locally.
     -->
     <ItemGroup>
-        <Content Include="Assets\Dictionaries\jmdict_english.zip"
-                 Condition="Exists('Assets\Dictionaries\jmdict_english.zip')">
+        <Content Include="Assets\Dictionaries\jmdict_english.zip" Condition="Exists('Assets\Dictionaries\jmdict_english.zip')">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
             <Visible>false</Visible>
         </Content>
-        <Content Include="Assets\Dictionaries\kanjidic_english.zip"
-                 Condition="Exists('Assets\Dictionaries\kanjidic_english.zip')">
+        <Content Include="Assets\Dictionaries\kanjidic_english.zip" Condition="Exists('Assets\Dictionaries\kanjidic_english.zip')">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
             <Visible>false</Visible>
@@ -39,5 +41,13 @@
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         </Content>
+        
+        <Content Include="images\icon.png" Condition="Exists('images\icon.png')">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        </Content>
+    </ItemGroup>
+    <ItemGroup>
+      <Folder Include="Assets\" />
     </ItemGroup>
 </Project>

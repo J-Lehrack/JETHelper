@@ -5,17 +5,15 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
-using JETHelper.Services;
-using JETHelper.Models;
+using JETHelper.Anki.Services;
 
 namespace JETHelper.Windows;
 
 /// <summary>
 /// Draws the plugin settings window.
 /// </summary>
-public class ConfigWindow : Window, IDisposable
-{
-    private static readonly (
+public class ConfigWindow : Window, IDisposable {
+    private static readonly(
               string Name,
               int VirtualKey)[] HotkeyOptions = BuildHotkeyOptions();
 
@@ -28,8 +26,7 @@ public class ConfigWindow : Window, IDisposable
     public ConfigWindow(Plugin plugin) :
           base("JETHelper Settings###JETHelperConfig")
     {
-        SizeConstraints = new WindowSizeConstraints
-        {
+        SizeConstraints = new WindowSizeConstraints {
             MinimumSize = new Vector2(500, 520),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
         };
@@ -53,6 +50,8 @@ public class ConfigWindow : Window, IDisposable
         ImGui.Separator();
         DrawAnkiSettings();
         ImGui.Separator();
+        DrawDiagnosticsSettings();
+        ImGui.Separator();
         DrawAcknowledgementsSettings();
     }
 
@@ -63,8 +62,7 @@ public class ConfigWindow : Window, IDisposable
         ImGui.Spacing();
 
         var enabled = configuration.ClipboardHotkeyEnabled;
-        if (ImGui.Checkbox("Enable clipboard hotkey", ref enabled))
-        {
+        if (ImGui.Checkbox("Enable clipboard hotkey", ref enabled)) {
             configuration.ClipboardHotkeyEnabled = enabled;
             configuration.Save();
         }
@@ -73,24 +71,21 @@ public class ConfigWindow : Window, IDisposable
         ImGui.SameLine();
 
         var requiresCtrl = configuration.ClipboardHotkeyRequiresCtrl;
-        if (ImGui.Checkbox("Ctrl", ref requiresCtrl))
-        {
+        if (ImGui.Checkbox("Ctrl", ref requiresCtrl)) {
             configuration.ClipboardHotkeyRequiresCtrl = requiresCtrl;
             configuration.Save();
         }
 
         ImGui.SameLine();
         var requiresAlt = configuration.ClipboardHotkeyRequiresAlt;
-        if (ImGui.Checkbox("Alt", ref requiresAlt))
-        {
+        if (ImGui.Checkbox("Alt", ref requiresAlt)) {
             configuration.ClipboardHotkeyRequiresAlt = requiresAlt;
             configuration.Save();
         }
 
         ImGui.SameLine();
         var requiresShift = configuration.ClipboardHotkeyRequiresShift;
-        if (ImGui.Checkbox("Shift", ref requiresShift))
-        {
+        if (ImGui.Checkbox("Shift", ref requiresShift)) {
             configuration.ClipboardHotkeyRequiresShift = requiresShift;
             configuration.Save();
         }
@@ -104,14 +99,11 @@ public class ConfigWindow : Window, IDisposable
 
         var currentKeyName = GetHotkeyName(
                   configuration.ClipboardHotkeyVirtualKey);
-        if (ImGui.BeginCombo("##ClipboardLookupKey", currentKeyName))
-        {
-            foreach (var option in HotkeyOptions)
-            {
+        if (ImGui.BeginCombo("##ClipboardLookupKey", currentKeyName)) {
+            foreach (var option in HotkeyOptions) {
                 var selected = option.VirtualKey
                                == configuration.ClipboardHotkeyVirtualKey;
-                if (ImGui.Selectable(option.Name, selected))
-                {
+                if (ImGui.Selectable(option.Name, selected)) {
                     configuration.ClipboardHotkeyVirtualKey = option.VirtualKey;
                     configuration.Save();
                 }
@@ -140,8 +132,7 @@ public class ConfigWindow : Window, IDisposable
                         ref dictionaryFolderPath,
                         1024);
 
-        if (ImGui.Button("Save Dictionary Path"))
-        {
+        if (ImGui.Button("Save Dictionary Path")) {
             configuration.DictionaryFolderPath = dictionaryFolderPath.Trim()
                                                            .Trim('"');
             configuration.Save();
@@ -149,8 +140,7 @@ public class ConfigWindow : Window, IDisposable
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("Clear Dictionary Path"))
-        {
+        if (ImGui.Button("Clear Dictionary Path")) {
             dictionaryFolderPath = string.Empty;
             configuration.DictionaryFolderPath = string.Empty;
             configuration.Save();
@@ -168,28 +158,87 @@ public class ConfigWindow : Window, IDisposable
         ImGui.TextDisabled(
                   $"Saved path exists: {(string.IsNullOrWhiteSpace(savedPath) ? "—" : exists ? "Yes" : "No")}");
 
-        if (ImGui.TreeNodeEx("Detected dictionary sources"))
-        {
-            var sources = plugin.LookupService.DictionarySources;
-            if (sources.Count == 0)
-            {
+        var sources = plugin.LookupService.DictionarySources;
+        var duplicateDecisions = plugin.LookupService
+                                           .DictionaryDuplicateDecisions;
+        var revisionGroups = plugin.LookupService.DictionaryRevisionGroups;
+        var loaderErrors = plugin.LookupService.DictionaryLoaderErrors;
+        var usableCount = sources.Count(source => source.IsUsable);
+        var warningCount = sources.Count(source => source.HasWarnings);
+        var problemCount = sources.Count(source => !source.IsUsable);
+        var health = usableCount == 0 ? "Not ready"
+                     : warningCount > 0 || problemCount > 0
+                                         || duplicateDecisions.Count > 0
+                                         || revisionGroups.Count > 0
+                                         || loaderErrors.Count > 0
+                               ? "Ready with warnings"
+                               : "Ready";
+
+        ImGui.TextDisabled(
+                  $"Dictionary status: {health} ({usableCount} usable, "
+                  + $"{warningCount} with warnings, "
+                  + $"{problemCount} skipped/unsupported, "
+                  + $"{loaderErrors.Count} load error(s))");
+
+        if (loaderErrors.Count > 0) {
+            ImGui.TextWrapped("Some dictionary banks failed while loading. "
+                              + "Working sources remain available; open "
+                              + "/jetdebug for technical details.");
+        }
+
+        if (ImGui.TreeNodeEx("Detected dictionary sources")) {
+            if (sources.Count == 0) {
                 ImGui.TextDisabled("No dictionary ZIP files were detected.");
             }
-            else
-            {
-                foreach (var source in sources)
-                {
-                    var details = source.Status
-                                  == DictionaryInspectionStatus.Ready
-                                      ? $"{source.DataKinds}; {source.Language}; {source.Origin}"
-                                      : $"{source.Status}; {source.Origin}";
+            else {
+                foreach (var source in sources) {
+                    var details
+                              = source.IsUsable
+                                          ? $"{source.Status}; {source.DataKinds}; "
+                                                      + $"{source.Language}; {source.Origin}"
+                                          : $"{source.Status}; {source.Origin}";
 
                     ImGui.BulletText(source.DisplayName);
                     ImGui.SameLine();
                     ImGui.TextDisabled($"({details})");
+                    ImGui.TextDisabled("  File: " + source.FilePath);
 
                     if (!string.IsNullOrWhiteSpace(source.ErrorMessage))
                         ImGui.TextWrapped("  " + source.ErrorMessage);
+                }
+            }
+
+            if (duplicateDecisions.Count > 0) {
+                ImGui.Spacing();
+                ImGui.TextUnformatted("Duplicate copies resolved");
+
+                foreach (var decision in duplicateDecisions) {
+                    ImGui.BulletText(decision.Preferred.DisplayName);
+                    ImGui.TextWrapped("  Using: "
+                                      + decision.Preferred.FilePath);
+                    ImGui.TextWrapped(
+                              "  Ignored: "
+                              + string.Join(
+                                        ", ",
+                                        decision.Ignored.Select(
+                                                  source => source.FilePath)));
+                    ImGui.TextDisabled("  " + decision.Reason);
+                }
+            }
+
+            if (revisionGroups.Count > 0) {
+                ImGui.Spacing();
+                ImGui.TextUnformatted("Multiple revisions loaded");
+                ImGui.TextDisabled(
+                          "Different revisions are treated as separate sources "
+                          + "rather than silently replacing one another.");
+
+                foreach (var group in revisionGroups) {
+                    ImGui.BulletText(group.DisplayName);
+                    foreach (var source in group.Sources) {
+                        ImGui.TextDisabled(
+                                  $"  Revision {EmptyDash(source.Revision)} — {source.Origin}: {source.FilePath}");
+                    }
                 }
             }
 
@@ -208,15 +257,13 @@ public class ConfigWindow : Window, IDisposable
         ImGui.SetNextItemWidth(415f);
         ImGui.InputText("##AnkiConnectUrl", ref ankiConnectUrl, 256);
 
-        if (ImGui.Button("Save Anki URL"))
-        {
+        if (ImGui.Button("Save Anki URL")) {
             configuration.AnkiConnectUrl = ankiConnectUrl.Trim();
             configuration.Save();
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("Refresh / Test AnkiConnect"))
-        {
+        if (ImGui.Button("Refresh / Test AnkiConnect")) {
             configuration.AnkiConnectUrl = ankiConnectUrl.Trim();
             configuration.Save();
             lastAnkiResult = plugin.AnkiService.TestConnection(configuration);
@@ -230,8 +277,7 @@ public class ConfigWindow : Window, IDisposable
         var decks = lastAnkiResult?.DeckNames ?? [];
         var noteTypes = lastAnkiResult?.NoteTypeNames ?? [];
 
-        if (lastAnkiResult is null)
-        {
+        if (lastAnkiResult is null) {
             ImGui.TextDisabled("Refresh AnkiConnect to populate deck, note "
                                + "type, and field dropdowns.");
             ImGui.TextWrapped(
@@ -254,8 +300,7 @@ public class ConfigWindow : Window, IDisposable
         if (ImGui.BeginTable("AnkiTargets",
                              2,
                              ImGuiTableFlags.SizingStretchSame
-                                       | ImGuiTableFlags.BordersInnerV))
-        {
+                                       | ImGuiTableFlags.BordersInnerV)) {
             ImGui.TableNextRow();
 
             ImGui.TableSetColumnIndex(0);
@@ -317,11 +362,25 @@ public class ConfigWindow : Window, IDisposable
         ImGui.TextDisabled("Also available with /jetcardconfig");
     }
 
+    private void DrawDiagnosticsSettings()
+    {
+        ImGui.TextWrapped("Open service health, recent troubleshooting events, "
+                          + "and controls "
+                          + "for the local JETHelper.log file.");
+
+        if (ImGui.Button("Open Diagnostics"))
+            plugin.OpenDiagnosticsUi();
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("Also available with /jetdebug");
+    }
+
     private void DrawAcknowledgementsSettings()
     {
         ImGui.TextWrapped(
-            "View acknowledgements, licences, bundled dictionary sources, "
-            + "and links to the official project and licence pages.");
+                  "View acknowledgements, licences, bundled dictionary "
+                  + "sources, "
+                  + "and links to the official project and licence pages.");
 
         if (ImGui.Button("Open Acknowledgements"))
             plugin.OpenAcknowledgementsUi();
@@ -411,8 +470,7 @@ public class ConfigWindow : Window, IDisposable
     {
         if (string.IsNullOrWhiteSpace(
                       configuration.VocabularyMappingNoteTypeName)
-            && HasAnyVocabularyMapping())
-        {
+            && HasAnyVocabularyMapping()) {
             // Migration path for configurations saved before mapping ownership
             // was tracked. Existing user choices are assumed to belong to the
             // currently selected note type, then validated below.
@@ -420,8 +478,7 @@ public class ConfigWindow : Window, IDisposable
         }
         else if (!string.Equals(configuration.VocabularyMappingNoteTypeName,
                                 modelName,
-                                StringComparison.Ordinal))
-        {
+                                StringComparison.Ordinal)) {
             InitializeVocabularyMappingsForNewModel(modelName, fields);
             return;
         }
@@ -452,14 +509,12 @@ public class ConfigWindow : Window, IDisposable
                                                    IReadOnlyList<string> fields)
     {
         if (string.IsNullOrWhiteSpace(configuration.KanjiMappingNoteTypeName)
-            && HasAnyKanjiMapping())
-        {
+            && HasAnyKanjiMapping()) {
             configuration.KanjiMappingNoteTypeName = modelName;
         }
         else if (!string.Equals(configuration.KanjiMappingNoteTypeName,
                                 modelName,
-                                StringComparison.Ordinal))
-        {
+                                StringComparison.Ordinal)) {
             InitializeKanjiMappingsForNewModel(modelName, fields);
             return;
         }
@@ -603,8 +658,7 @@ public class ConfigWindow : Window, IDisposable
         ImGui.TextUnformatted(label);
         ImGui.SetNextItemWidth(-1f);
 
-        if (options.Count == 0)
-        {
+        if (options.Count == 0) {
             ImGui.BeginDisabled();
             if (ImGui.BeginCombo("##" + label, EmptyDash(currentValue)))
                 ImGui.EndCombo();
@@ -615,8 +669,7 @@ public class ConfigWindow : Window, IDisposable
         if (!ImGui.BeginCombo("##" + label, EmptyDash(currentValue)))
             return;
 
-        foreach (var option in options.OrderBy(x => x))
-        {
+        foreach (var option in options.OrderBy(x => x)) {
             var isSelected = option == currentValue;
             if (ImGui.Selectable(option, isSelected))
                 onSelected(option);
