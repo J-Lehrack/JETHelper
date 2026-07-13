@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using JETHelper.Anki.Models;
+using JETHelper.Anki.Templates;
 using JETHelper.Diagnostics.Services;
 using JETHelper.Dictionaries.Models;
 using JETHelper.Lookup.Services;
@@ -204,6 +205,242 @@ public sealed class AnkiService : IDisposable
                   requiredRoles: ["Kanji Character", "Meaning"],
                   tags: BuildTags(kanji.Tags, "kanji"),
                   successMessage: $"Added kanji card: {kanji.KanjiCharacter}");
+    }
+
+
+    /// <summary>
+    /// Creates or confirms both optional recommended JETHelper decks. Anki's
+    /// createDeck action is idempotent, so existing decks are left intact.
+    /// This operation is intentionally independent from note-type installation.
+    /// </summary>
+    public AnkiDeckCreationResult CreateRecommendedJetHelperDecks(
+        Configuration configuration)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var readyDecks = new List<string>();
+
+        try
+        {
+            foreach (var deckName in new[]
+                     {
+                         JETHelperAnkiTemplates.VocabularyDeckName,
+                         JETHelperAnkiTemplates.KanjiDeckName
+                     })
+            {
+                InvokeAction(
+                    configuration.AnkiConnectUrl,
+                    "createDeck",
+                    new { deck = deckName });
+                readyDecks.Add(deckName);
+            }
+
+            stopwatch.Stop();
+
+            diagnostics.Information(
+                "AnkiConnect",
+                $"Created or confirmed recommended decks in "
+                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                + $"decks={string.Join(", ", readyDecks)}.");
+
+            return AnkiDeckCreationResult.Ok(
+                "Created or confirmed both recommended JETHelper decks.",
+                readyDecks);
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+
+            diagnostics.Error(
+                "AnkiConnect",
+                $"Recommended deck creation failed after "
+                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                + $"ready decks={string.Join(", ", readyDecks)}.",
+                ex);
+
+            var partialMessage = readyDecks.Count == 0
+                ? string.Empty
+                : " These decks were ready before the failure: "
+                  + string.Join(", ", readyDecks) + ".";
+
+            return AnkiDeckCreationResult.Failed(
+                "Could not create or confirm both recommended decks: "
+                + ex.Message
+                + partialMessage,
+                readyDecks);
+        }
+    }
+
+    /// <summary>
+    /// Creates the optional JETHelper vocabulary note type. Existing note types
+    /// are never overwritten; a compatible existing type is left unchanged and
+    /// may be selected for use.
+    /// </summary>
+    public AnkiTemplateInstallResult InstallJetHelperVocabularyNoteType(
+        Configuration configuration)
+        => InstallTemplateBundle(
+            configuration.AnkiConnectUrl,
+            JETHelperAnkiTemplates.Vocabulary);
+
+    /// <summary>
+    /// Creates the optional JETHelper kanji note type. Existing note types are
+    /// never overwritten.
+    /// </summary>
+    public AnkiTemplateInstallResult InstallJetHelperKanjiNoteType(
+        Configuration configuration)
+        => InstallTemplateBundle(
+            configuration.AnkiConnectUrl,
+            JETHelperAnkiTemplates.Kanji);
+
+    private AnkiTemplateInstallResult InstallTemplateBundle(
+        string url,
+        AnkiTemplateBundle bundle)
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            var modelNames = InvokeStringListAction(url, "modelNames");
+            if (modelNames.Contains(
+                    bundle.NoteTypeName,
+                    StringComparer.Ordinal))
+            {
+                var existingFields = InvokeStringListAction(
+                    url,
+                    "modelFieldNames",
+                    new { modelName = bundle.NoteTypeName });
+
+                var missingFields = bundle.Fields
+                    .Where(field => !existingFields.Contains(
+                        field,
+                        StringComparer.Ordinal))
+                    .ToList();
+
+                var existingTemplates = missingFields.Count == 0
+                    ? InvokeAction(
+                        url,
+                        "modelTemplates",
+                        new { modelName = bundle.NoteTypeName })
+                    : default;
+                var existingStyling = missingFields.Count == 0
+                    ? InvokeAction(
+                        url,
+                        "modelStyling",
+                        new { modelName = bundle.NoteTypeName })
+                    : default;
+                var isRecognizedJetHelperType
+                    = missingFields.Count == 0
+                      && IsRecognizedJetHelperNoteType(
+                          bundle,
+                          existingTemplates,
+                          existingStyling);
+
+                stopwatch.Stop();
+
+                if (missingFields.Count > 0)
+                {
+                    var incompatibleMessage
+                        = $"An Anki note type named \"{bundle.NoteTypeName}\" "
+                          + "already exists, but it is missing JETHelper fields: "
+                          + string.Join(", ", missingFields)
+                          + ". JETHelper left it unchanged.";
+
+                    diagnostics.Warning(
+                        "AnkiConnect",
+                        $"Optional note-type installation rejected after "
+                        + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                        + incompatibleMessage);
+
+                    return AnkiTemplateInstallResult.Failed(
+                        incompatibleMessage,
+                        bundle.NoteTypeName);
+                }
+
+                if (!isRecognizedJetHelperType)
+                {
+                    var unrecognizedMessage
+                        = $"An Anki note type named \"{bundle.NoteTypeName}\" "
+                          + "already exists and has compatible fields, but its "
+                          + "templates are not recognized as JETHelper templates. "
+                          + "JETHelper left it unchanged. Rename the existing "
+                          + "note type before installing, or select it manually.";
+
+                    diagnostics.Warning(
+                        "AnkiConnect",
+                        $"Optional note-type installation stopped after "
+                        + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                        + unrecognizedMessage);
+
+                    return AnkiTemplateInstallResult.Failed(
+                        unrecognizedMessage,
+                        bundle.NoteTypeName);
+                }
+
+                var existingMessage
+                    = $"The JETHelper note type \"{bundle.NoteTypeName}\" "
+                      + "already exists. Its templates and styling were left "
+                      + "unchanged.";
+
+                diagnostics.Information(
+                    "AnkiConnect",
+                    $"Optional JETHelper note type already exists; no overwrite "
+                    + $"performed after "
+                    + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                    + $"note type={bundle.NoteTypeName}.");
+
+                return AnkiTemplateInstallResult.Existing(
+                    existingMessage,
+                    bundle.NoteTypeName);
+            }
+
+            var cardTemplates = new[]
+            {
+                new
+                {
+                    Name = bundle.CardTemplateName,
+                    Front = bundle.FrontTemplate,
+                    Back = bundle.BackTemplate
+                }
+            };
+
+            InvokeAction(
+                url,
+                "createModel",
+                new
+                {
+                    modelName = bundle.NoteTypeName,
+                    inOrderFields = bundle.Fields,
+                    css = bundle.Css,
+                    isCloze = false,
+                    cardTemplates
+                });
+
+            stopwatch.Stop();
+
+            diagnostics.Information(
+                "AnkiConnect",
+                $"Created optional note type in "
+                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                + $"note type={bundle.NoteTypeName}; "
+                + $"template version={JETHelperAnkiTemplates.TemplateVersion}.");
+            return AnkiTemplateInstallResult.Created(
+                $"Created the note type \"{bundle.NoteTypeName}\".",
+                bundle.NoteTypeName);
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+
+            diagnostics.Error(
+                "AnkiConnect",
+                $"Optional note-type installation failed after "
+                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                + $"note type={bundle.NoteTypeName}.",
+                ex);
+
+            return AnkiTemplateInstallResult.Failed(
+                "Could not install the JETHelper note type: " + ex.Message,
+                bundle.NoteTypeName);
+        }
     }
 
     private AnkiAddResult
@@ -422,6 +659,38 @@ public sealed class AnkiService : IDisposable
             throw new InvalidOperationException(parsed.Error);
 
         return parsed.Result;
+    }
+
+    private static bool IsRecognizedJetHelperNoteType(
+        AnkiTemplateBundle bundle,
+        JsonElement templates,
+        JsonElement styling)
+    {
+        if (templates.ValueKind != JsonValueKind.Object
+            || !templates.TryGetProperty(
+                bundle.CardTemplateName,
+                out var cardTemplate)
+            || cardTemplate.ValueKind != JsonValueKind.Object)
+            return false;
+
+        var front = cardTemplate.TryGetProperty("Front", out var frontElement)
+            ? frontElement.GetString() ?? string.Empty
+            : string.Empty;
+        var back = cardTemplate.TryGetProperty("Back", out var backElement)
+            ? backElement.GetString() ?? string.Empty
+            : string.Empty;
+        var css = styling.ValueKind == JsonValueKind.Object
+                  && styling.TryGetProperty("css", out var cssElement)
+            ? cssElement.GetString() ?? string.Empty
+            : string.Empty;
+
+        return front.Contains(bundle.TemplateMarker, StringComparison.Ordinal)
+               && back.Contains(
+                   bundle.TemplateMarker,
+                   StringComparison.Ordinal)
+               && css.Contains(
+                   "JETHelper Anki templates",
+                   StringComparison.Ordinal);
     }
 
     private static string BuildFuriganaField(VocabularyCardData vocab)

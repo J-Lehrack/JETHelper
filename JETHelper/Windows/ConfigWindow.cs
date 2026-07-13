@@ -5,7 +5,9 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
+using JETHelper.Anki.Models;
 using JETHelper.Anki.Services;
+using JETHelper.Anki.Templates;
 
 namespace JETHelper.Windows;
 
@@ -22,6 +24,9 @@ public class ConfigWindow : Window, IDisposable {
     private string dictionaryFolderPath;
     private string ankiConnectUrl;
     private AnkiConnectionResult? lastAnkiResult;
+    private string recommendedDeckStatus = string.Empty;
+    private string vocabularyTemplateStatus = string.Empty;
+    private string kanjiTemplateStatus = string.Empty;
 
     public ConfigWindow(Plugin plugin) :
           base("JETHelper Settings###JETHelperConfig")
@@ -355,11 +360,150 @@ public class ConfigWindow : Window, IDisposable {
         }
 
         ImGui.Spacing();
+        DrawOptionalJetHelperNoteTypes();
+
+        ImGui.Spacing();
         if (ImGui.Button("Open Card Field Mappings"))
             plugin.OpenCardConfigUi();
 
         ImGui.SameLine();
         ImGui.TextDisabled("Also available with /jetcardconfig");
+    }
+
+    private void DrawOptionalJetHelperNoteTypes()
+    {
+        if (!ImGui.TreeNodeEx("Optional JETHelper note types"))
+            return;
+
+        ImGui.TextWrapped(
+                  "JETHelper can create polished vocabulary and kanji note "
+                  + "types "
+                  + "using the field names already supported by the plugin. "
+                  + "Installation is opt-in and never overwrites an existing "
+                    + "note "
+                  + "type's templates or styling.");
+
+        ImGui.Spacing();
+        ImGui.TextWrapped("Recommended decks are created independently from "
+                          + "note types, so "
+                          + "a note-type naming conflict cannot prevent deck "
+                            + "creation.");
+
+        if (ImGui.Button("Create Recommended Decks", new Vector2(-1f, 0f))) {
+            var result = plugin.AnkiService.CreateRecommendedJetHelperDecks(
+                      configuration);
+            recommendedDeckStatus = result.Message;
+
+            if (result.Success) {
+                lastAnkiResult = plugin.AnkiService.TestConnection(
+                          configuration);
+
+                if (lastAnkiResult.Success) {
+                    configuration.VocabularyDeckName
+                              = JETHelperAnkiTemplates.VocabularyDeckName;
+                    configuration.KanjiDeckName = JETHelperAnkiTemplates
+                                                            .KanjiDeckName;
+                    configuration.Save();
+                    recommendedDeckStatus += " They are now selected for "
+                                             + "vocabulary and kanji "
+                                             + "card export.";
+                }
+                else {
+                    recommendedDeckStatus
+                              += " The decks were created or confirmed, but "
+                                 + "JETHelper "
+                                 + "could not refresh Anki's deck list.";
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(recommendedDeckStatus))
+            ImGui.TextWrapped(recommendedDeckStatus);
+
+        ImGui.TextDisabled(
+                  $"Vocabulary deck: {JETHelperAnkiTemplates.VocabularyDeckName}");
+        ImGui.TextDisabled(
+                  $"Kanji deck: {JETHelperAnkiTemplates.KanjiDeckName}");
+
+        ImGui.Spacing();
+
+        if (ImGui.BeginTable("JETHelperNoteTypeInstallers",
+                             2,
+                             ImGuiTableFlags.SizingStretchSame
+                                       | ImGuiTableFlags.BordersInnerV)) {
+            ImGui.TableNextRow();
+
+            ImGui.TableSetColumnIndex(0);
+            if (ImGui.Button("Install Vocabulary Note Type",
+                             new Vector2(-1f, 0f))) {
+                var result = plugin.AnkiService
+                                       .InstallJetHelperVocabularyNoteType(
+                                                 configuration);
+                vocabularyTemplateStatus = result.Message;
+                ApplyInstalledTemplateSelection(result,
+                                                AnkiCardType.Vocabulary);
+            }
+
+            if (!string.IsNullOrWhiteSpace(vocabularyTemplateStatus))
+                ImGui.TextWrapped(vocabularyTemplateStatus);
+
+            ImGui.TableSetColumnIndex(1);
+            if (ImGui.Button("Install Kanji Note Type", new Vector2(-1f, 0f))) {
+                var result = plugin.AnkiService.InstallJetHelperKanjiNoteType(
+                          configuration);
+                kanjiTemplateStatus = result.Message;
+                ApplyInstalledTemplateSelection(result, AnkiCardType.Kanji);
+            }
+
+            if (!string.IsNullOrWhiteSpace(kanjiTemplateStatus))
+                ImGui.TextWrapped(kanjiTemplateStatus);
+
+            ImGui.EndTable();
+        }
+
+        ImGui.Spacing();
+        ImGui.TextDisabled(
+                  "Templates use native Anki HTML/CSS and conditional fields. "
+                  + "No JavaScript, remote fonts, or external web resources "
+                    + "are used.");
+
+        ImGui.TreePop();
+    }
+
+    private void
+    ApplyInstalledTemplateSelection(AnkiTemplateInstallResult installResult,
+                                    AnkiCardType cardType)
+    {
+        if (!installResult.Success)
+            return;
+
+        lastAnkiResult = plugin.AnkiService.TestConnection(configuration);
+        if (!lastAnkiResult.Success) {
+            var refreshMessage = " The note type operation succeeded, but "
+                                 + "JETHelper could not "
+                                 + "refresh Anki's deck and field lists.";
+            if (cardType == AnkiCardType.Vocabulary)
+                vocabularyTemplateStatus += refreshMessage;
+            else
+                kanjiTemplateStatus += refreshMessage;
+
+            return;
+        }
+
+        if (cardType == AnkiCardType.Vocabulary) {
+            configuration.VocabularyNoteTypeName = installResult.NoteTypeName;
+            InitializeVocabularyMappingsForNewModel(
+                      installResult.NoteTypeName,
+                      GetModelFields(installResult.NoteTypeName));
+        }
+        else {
+            configuration.KanjiNoteTypeName = installResult.NoteTypeName;
+            InitializeKanjiMappingsForNewModel(
+                      installResult.NoteTypeName,
+                      GetModelFields(installResult.NoteTypeName));
+        }
+
+        configuration.Save();
     }
 
     private void DrawDiagnosticsSettings()

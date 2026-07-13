@@ -12,8 +12,8 @@
         <IsPackable>false</IsPackable>
     </PropertyGroup>
     <ItemGroup>
-      <Compile Remove="Assets\Dictionaries\**" />
-      <EmbeddedResource Remove="Assets\Dictionaries\**" />
+        <Compile Remove="Assets\Dictionaries\**" />
+        <EmbeddedResource Remove="Assets\Dictionaries\**" />
     </ItemGroup>
 
     <!--
@@ -41,13 +41,14 @@
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         </Content>
-        
-        <Content Include="images\icon.png" Condition="Exists('images\icon.png')">
+
+        <Content Include="..\images\icon.png" Condition="Exists('..\images\icon.png')">
+            <Link>images\icon.png</Link>
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         </Content>
     </ItemGroup>
     <ItemGroup>
-      <Folder Include="Assets\" />
+        <Folder Include="Assets\" />
     </ItemGroup>
 </Project>

@@ -2,7 +2,7 @@
 
 JETHelper is a Dalamud plugin for Japanese learners playing FINAL FANTASY XIV. It turns copied or manually entered Japanese text into vocabulary and kanji lookup results, then sends selected entries to configurable Anki decks through AnkiConnect.
 
-> **Project status:** Functional alpha. The core lookup-to-Anki workflow works, but installation, dictionary distribution, deinflection, candidate ranking, and media fields still need refinement before a general release.
+> **Project status:** Functional alpha. The core lookup-to-Anki workflow, bundled dictionaries, diagnostics, and optional Anki note types are implemented, but asynchronous Anki operations, deinflection, candidate ranking, and media fields still need refinement before a general release.
 
 ## Current features
 
@@ -12,6 +12,7 @@ JETHelper is a Dalamud plugin for Japanese learners playing FINAL FANTASY XIV. I
 - English, Japanese, slang/media, frequency, reading, and stroke data when supported dictionaries provide it.
 - Configurable vocabulary and kanji decks, note types, and field mappings.
 - Anki card creation through AnkiConnect, including duplicate prevention and required-field validation.
+- Optional JETHelper vocabulary and kanji note types with responsive, night-mode-aware styling.
 - Persistent plugin settings through Dalamud.
 
 ## Requirements
@@ -54,6 +55,8 @@ At runtime, JETHelper first checks its installed plugin assets and then falls ba
 
 JETHelper currently permits only the approved bundled archives `jmdict_english.zip` and `kanjidic_english.zip` to be included in release output. Other compatible dictionaries may be supplied by the user through `/jetconfig` and are never included automatically. See `JETHelper/Assets/Dictionaries/README.md`.
 
+When the same dictionary title and revision are found more than once, JETHelper prefers the healthier readable copy first and then prefers a user-configured copy over an equally healthy bundled copy. Different revisions are loaded as separate sources rather than silently replacing one another.
+
 ## Dictionary data and acknowledgements
 
 JETHelper bundles Yomitan-compatible versions of **JMdict (English)** and **KANJIDIC/KANJIDIC2 (English)**, whose underlying data is maintained by the Electronic Dictionary Research and Development Group (EDRDG).
@@ -70,7 +73,19 @@ Additional dictionaries selected by users are not distributed by JETHelper and r
 4. Select vocabulary and kanji decks and note types.
 5. Open `/jetcardconfig` to map JETHelper data roles to your existing Anki fields.
 
-JETHelper does not modify the styling of existing note types. Bundled optional templates and styling are planned for a later phase.
+After a successful refresh, expand **Optional JETHelper note types** to:
+
+- create `JETHelper Vocabulary`;
+- create `JETHelper Kanji`;
+- independently create and select the recommended decks
+  `JETHelper::Vocabulary` and `JETHelper::Kanji`.
+
+Deck creation is a separate action, so a conflicting note-type name cannot
+prevent the recommended decks from being created.
+
+The note-type installers create new note types only. If an exact-name note type already exists, JETHelper leaves it unchanged. Previously installed JETHelper templates are recognized and may be selected again; an unrelated same-name note type is not modified or automatically selected. Empty optional fields are hidden with native Anki conditional replacements, so labels such as **Japanese**, **Slang / Media**, **Frequency**, and **Example** appear only when their fields contain data.
+
+The bundled templates use only local HTML and CSS. They contain no JavaScript, remote fonts, or external web resources.
 
 ## Privacy and network behavior
 
@@ -109,7 +124,7 @@ JETHelper/bin/x64/Debug/JETHelper.dll
 
 ## Roadmap
 
-Near-term work includes optional JETHelper Anki templates/CSS, stronger deinflection, better candidate ranking, and release-safe dictionary installation.
+Near-term work includes asynchronous AnkiConnect operations, stronger deinflection, better candidate ranking, and continued card-template testing and refinement.
 
 ## License
 
