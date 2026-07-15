@@ -6,6 +6,8 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using JETHelper.Anki.Models;
 using JETHelper.Anki.Templates;
 using JETHelper.Diagnostics.Services;
@@ -16,17 +18,20 @@ namespace JETHelper.Anki.Services;
 
 /// <summary>
 /// Talks to AnkiConnect through its local HTTP API.
+///
+/// All network operations are asynchronous so a slow or unavailable Anki
+/// instance cannot block Dalamud's framework/UI thread.
 /// </summary>
-public sealed class AnkiService : IDisposable
-{
+public sealed class AnkiService : IDisposable {
     private readonly DiagnosticService diagnostics;
-    private readonly HttpClient httpClient = new()
-    {
+    private readonly object lifecycleLock = new();
+    private readonly CancellationTokenSource disposeCancellation = new();
+    private readonly HttpClient httpClient = new() {
         Timeout = TimeSpan.FromSeconds(4)
     };
+    private bool disposed;
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
+    private static readonly JsonSerializerOptions JsonOptions = new() {
         PropertyNameCaseInsensitive = true,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
@@ -36,39 +41,66 @@ public sealed class AnkiService : IDisposable
         this.diagnostics = diagnostics;
     }
 
-    public void Dispose() => httpClient.Dispose();
+    public void Dispose()
+    {
+        lock (lifecycleLock)
+        {
+            if (disposed)
+                return;
+
+            disposed = true;
+            disposeCancellation.Cancel();
+            disposeCancellation.Dispose();
+        }
+
+        httpClient.Dispose();
+    }
 
     /// <summary>
     /// Loads available decks, note types, and each note type's fields. The
     /// configuration window uses this information for dropdowns and mappings.
     /// </summary>
-    public AnkiConnectionResult TestConnection(Configuration configuration)
+    public async Task<AnkiConnectionResult>
+    TestConnectionAsync(Configuration configuration,
+                        CancellationToken cancellationToken = default)
     {
-        using var timing = diagnostics.Measure(
-            "AnkiConnect",
-            "Connection refresh",
-            $"url={configuration.AnkiConnectUrl}");
+        using var linkedCancellation = CreateOperationCancellation(
+                  cancellationToken);
+        var token = linkedCancellation.Token;
+        var url = configuration.AnkiConnectUrl;
+        var stopwatch = Stopwatch.StartNew();
 
-        try
-        {
-            var decks = InvokeStringListAction(configuration.AnkiConnectUrl,
-                                               "deckNames");
-            var models = InvokeStringListAction(configuration.AnkiConnectUrl,
-                                                "modelNames");
+        try {
+            var decks = await InvokeStringListActionAsync(url,
+                                                          "deckNames",
+                                                          token)
+                                  .ConfigureAwait(false);
+            var models = await InvokeStringListActionAsync(url,
+                                                           "modelNames",
+                                                           token)
+                                   .ConfigureAwait(false);
             var modelFields = new Dictionary<string, List<string>>(
                       StringComparer.Ordinal);
 
-            foreach (var model in models)
-            {
-                modelFields[model] = InvokeStringListAction(
-                          configuration.AnkiConnectUrl,
-                          "modelFieldNames",
-                          new { modelName = model });
+            // Keep requests sequential. AnkiConnect is a local single-user API,
+            // and flooding it with one request per note type would add needless
+            // peak work for users with large Anki collections.
+            foreach (var model in models) {
+                token.ThrowIfCancellationRequested();
+                modelFields[model] = await InvokeStringListActionAsync(
+                                               url,
+                                               "modelFieldNames",
+                                               new { modelName = model },
+                                               token)
+                                               .ConfigureAwait(false);
             }
 
+            stopwatch.Stop();
             diagnostics.Information(
-                "AnkiConnect",
-                $"Connected successfully. Decks={decks.Count}; note types={models.Count}.");
+                      "AnkiConnect",
+                      $"Connection refresh succeeded in "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                                + $"Decks={decks.Count}; note types={models.Count}.");
 
             return new AnkiConnectionResult(
                       Success: true,
@@ -77,26 +109,33 @@ public sealed class AnkiService : IDisposable
                       NoteTypeNames: models,
                       ModelFields: modelFields);
         }
-        catch (Exception ex)
-        {
-            diagnostics.Error(
-                "AnkiConnect",
-                "Connection refresh failed.",
-                ex);
+        catch (OperationCanceledException)
+                  when (token.IsCancellationRequested) {
+            stopwatch.Stop();
+            diagnostics.Information(
+                      "AnkiConnect",
+                      $"Connection refresh cancelled after "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms.");
 
-            return new AnkiConnectionResult(
-                      Success: false,
-                      Message: "Could not connect to AnkiConnect: "
-                                + ex.Message,
-                      DeckNames: [],
-                      NoteTypeNames: [],
-                      ModelFields: new Dictionary<string, List<string>>(
-                                StringComparer.Ordinal));
+            return FailedConnectionResult("AnkiConnect refresh was cancelled.");
+        }
+        catch (Exception ex) {
+            stopwatch.Stop();
+            diagnostics.Error(
+                      "AnkiConnect",
+                      $"Connection refresh failed after "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms.",
+                      ex);
+
+            return FailedConnectionResult("Could not connect to AnkiConnect: "
+                                          + ex.Message);
         }
     }
 
-    public AnkiAddResult AddVocabularyCard(Configuration configuration,
-                                           VocabularyCardData vocab)
+    public async Task<AnkiAddResult>
+    AddVocabularyCardAsync(Configuration configuration,
+                           VocabularyCardData vocab,
+                           CancellationToken cancellationToken = default)
     {
         var missingValues = new List<string>();
         if (string.IsNullOrWhiteSpace(vocab.Expression))
@@ -110,8 +149,7 @@ public sealed class AnkiService : IDisposable
                                       + string.Join(", ", missingValues) + ".");
 
         var valuesByRole = new Dictionary<string, string>(
-                  StringComparer.Ordinal)
-        {
+                  StringComparer.Ordinal) {
             ["Expression"] = vocab.Expression,
             ["Furigana"] = BuildFuriganaField(vocab),
             ["Meaning English"] = FormatDefinitions(vocab.EnglishDefinitions),
@@ -127,8 +165,7 @@ public sealed class AnkiService : IDisposable
                                          : string.Empty
         };
 
-        var mappings = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
+        var mappings = new Dictionary<string, string>(StringComparer.Ordinal) {
             ["Expression"] = configuration.VocabularyExpressionField,
             ["Furigana"] = configuration.VocabularyFuriganaField,
             ["Meaning English"] = configuration.VocabularyMeaningEnglishField,
@@ -140,19 +177,23 @@ public sealed class AnkiService : IDisposable
             ["Pitch Accent"] = configuration.VocabularyPitchAccentField
         };
 
-        return AddMappedNote(
-                  configuration.AnkiConnectUrl,
-                  configuration.VocabularyDeckName,
-                  configuration.VocabularyNoteTypeName,
-                  valuesByRole,
-                  mappings,
-                  requiredRoles: ["Expression", "Meaning English"],
-                  tags: BuildTags(vocab.Tags, "vocab"),
-                  successMessage: $"Added vocabulary card: {vocab.Expression}");
+        return await AddMappedNoteAsync(
+                         configuration.AnkiConnectUrl,
+                         configuration.VocabularyDeckName,
+                         configuration.VocabularyNoteTypeName,
+                         valuesByRole,
+                         mappings,
+                         requiredRoles: ["Expression", "Meaning English"],
+                         tags: BuildTags(vocab.Tags, "vocab"),
+                         successMessage: $"Added vocabulary card: {vocab.Expression}",
+                         cancellationToken: cancellationToken)
+                  .ConfigureAwait(false);
     }
 
-    public AnkiAddResult AddKanjiCard(Configuration configuration,
-                                      KanjiCardData kanji)
+    public async Task<AnkiAddResult>
+    AddKanjiCardAsync(Configuration configuration,
+                      KanjiCardData kanji,
+                      CancellationToken cancellationToken = default)
     {
         var missingValues = new List<string>();
         if (string.IsNullOrWhiteSpace(kanji.KanjiCharacter))
@@ -166,8 +207,7 @@ public sealed class AnkiService : IDisposable
                       + string.Join(", ", missingValues) + ".");
 
         var valuesByRole = new Dictionary<string, string>(
-                  StringComparer.Ordinal)
-        {
+                  StringComparer.Ordinal) {
             ["Kanji Character"] = kanji.KanjiCharacter,
             ["Meaning"] = NumberedLines(kanji.Meanings),
             ["Kunyomi"] = string.Join("、", kanji.Kunyomi),
@@ -184,8 +224,7 @@ public sealed class AnkiService : IDisposable
             ["Diagram"] = kanji.Diagram
         };
 
-        var mappings = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
+        var mappings = new Dictionary<string, string>(StringComparer.Ordinal) {
             ["Kanji Character"] = configuration.KanjiCharacterField,
             ["Meaning"] = configuration.KanjiMeaningField,
             ["Kunyomi"] = configuration.KanjiKunyomiField,
@@ -196,77 +235,92 @@ public sealed class AnkiService : IDisposable
             ["Diagram"] = configuration.KanjiDiagramField
         };
 
-        return AddMappedNote(
-                  configuration.AnkiConnectUrl,
-                  configuration.KanjiDeckName,
-                  configuration.KanjiNoteTypeName,
-                  valuesByRole,
-                  mappings,
-                  requiredRoles: ["Kanji Character", "Meaning"],
-                  tags: BuildTags(kanji.Tags, "kanji"),
-                  successMessage: $"Added kanji card: {kanji.KanjiCharacter}");
+        return await AddMappedNoteAsync(
+                         configuration.AnkiConnectUrl,
+                         configuration.KanjiDeckName,
+                         configuration.KanjiNoteTypeName,
+                         valuesByRole,
+                         mappings,
+                         requiredRoles: ["Kanji Character", "Meaning"],
+                         tags: BuildTags(kanji.Tags, "kanji"),
+                         successMessage: $"Added kanji card: {kanji.KanjiCharacter}",
+                         cancellationToken: cancellationToken)
+                  .ConfigureAwait(false);
     }
-
 
     /// <summary>
     /// Creates or confirms both optional recommended JETHelper decks. Anki's
     /// createDeck action is idempotent, so existing decks are left intact.
     /// This operation is intentionally independent from note-type installation.
     /// </summary>
-    public AnkiDeckCreationResult CreateRecommendedJetHelperDecks(
-        Configuration configuration)
+    public async Task<AnkiDeckCreationResult>
+    CreateRecommendedJetHelperDecksAsync(
+              Configuration configuration,
+              CancellationToken cancellationToken = default)
     {
+        using var linkedCancellation = CreateOperationCancellation(
+                  cancellationToken);
+        var token = linkedCancellation.Token;
+        var url = configuration.AnkiConnectUrl;
         var stopwatch = Stopwatch.StartNew();
         var readyDecks = new List<string>();
 
-        try
-        {
-            foreach (var deckName in new[]
-                     {
+        try {
+            foreach (var deckName in new[] {
                          JETHelperAnkiTemplates.VocabularyDeckName,
                          JETHelperAnkiTemplates.KanjiDeckName
-                     })
-            {
-                InvokeAction(
-                    configuration.AnkiConnectUrl,
-                    "createDeck",
-                    new { deck = deckName });
+                     }) {
+                token.ThrowIfCancellationRequested();
+                await InvokeActionAsync(
+                          url, "createDeck", new { deck = deckName }, token)
+                          .ConfigureAwait(false);
                 readyDecks.Add(deckName);
             }
 
             stopwatch.Stop();
-
             diagnostics.Information(
-                "AnkiConnect",
-                $"Created or confirmed recommended decks in "
-                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
-                + $"decks={string.Join(", ", readyDecks)}.");
+                      "AnkiConnect",
+                      $"Created or confirmed recommended decks in "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                                + $"decks={string.Join(", ", readyDecks)}.");
 
             return AnkiDeckCreationResult.Ok(
-                "Created or confirmed both recommended JETHelper decks.",
-                readyDecks);
+                      "Created or confirmed both recommended JETHelper decks.",
+                      readyDecks);
         }
-        catch (Exception ex)
-        {
+        catch (OperationCanceledException)
+                  when (token.IsCancellationRequested) {
             stopwatch.Stop();
-
-            diagnostics.Error(
-                "AnkiConnect",
-                $"Recommended deck creation failed after "
-                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
-                + $"ready decks={string.Join(", ", readyDecks)}.",
-                ex);
-
-            var partialMessage = readyDecks.Count == 0
-                ? string.Empty
-                : " These decks were ready before the failure: "
-                  + string.Join(", ", readyDecks) + ".";
+            diagnostics.Information(
+                      "AnkiConnect",
+                      $"Recommended deck creation cancelled after "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                                + $"ready decks={string.Join(", ", readyDecks)}.");
 
             return AnkiDeckCreationResult.Failed(
-                "Could not create or confirm both recommended decks: "
-                + ex.Message
-                + partialMessage,
-                readyDecks);
+                      "Recommended deck creation was cancelled.", readyDecks);
+        }
+        catch (Exception ex) {
+            stopwatch.Stop();
+            diagnostics.Error(
+                      "AnkiConnect",
+                      $"Recommended deck creation failed after "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                                + $"ready decks={string.Join(", ", readyDecks)}.",
+                      ex);
+
+            var partialMessage = readyDecks.Count == 0
+                                           ? string.Empty
+                                           : " These decks were ready before "
+                                                       + "the failure: "
+                                                       + string.Join(", ",
+                                                                     readyDecks)
+                                                       + ".";
+
+            return AnkiDeckCreationResult.Failed(
+                      "Could not create or confirm both recommended decks: "
+                                + ex.Message + partialMessage,
+                      readyDecks);
         }
     }
 
@@ -275,352 +329,389 @@ public sealed class AnkiService : IDisposable
     /// are never overwritten; a compatible existing type is left unchanged and
     /// may be selected for use.
     /// </summary>
-    public AnkiTemplateInstallResult InstallJetHelperVocabularyNoteType(
-        Configuration configuration)
-        => InstallTemplateBundle(
-            configuration.AnkiConnectUrl,
-            JETHelperAnkiTemplates.Vocabulary);
+    public Task<AnkiTemplateInstallResult>
+    InstallJetHelperVocabularyNoteTypeAsync(
+              Configuration configuration,
+              CancellationToken cancellationToken
+              = default) => InstallTemplateBundleAsync(configuration
+                                                                 .AnkiConnectUrl,
+                                                       JETHelperAnkiTemplates
+                                                                 .Vocabulary,
+                                                       cancellationToken);
 
     /// <summary>
     /// Creates the optional JETHelper kanji note type. Existing note types are
     /// never overwritten.
     /// </summary>
-    public AnkiTemplateInstallResult InstallJetHelperKanjiNoteType(
-        Configuration configuration)
-        => InstallTemplateBundle(
-            configuration.AnkiConnectUrl,
-            JETHelperAnkiTemplates.Kanji);
+    public Task<AnkiTemplateInstallResult> InstallJetHelperKanjiNoteTypeAsync(
+              Configuration configuration,
+              CancellationToken cancellationToken
+              = default) => InstallTemplateBundleAsync(configuration
+                                                                 .AnkiConnectUrl,
+                                                       JETHelperAnkiTemplates
+                                                                 .Kanji,
+                                                       cancellationToken);
 
-    private AnkiTemplateInstallResult InstallTemplateBundle(
-        string url,
-        AnkiTemplateBundle bundle)
+    private async Task<AnkiTemplateInstallResult>
+    InstallTemplateBundleAsync(string url,
+                               AnkiTemplateBundle bundle,
+                               CancellationToken cancellationToken)
     {
+        using var linkedCancellation = CreateOperationCancellation(
+                  cancellationToken);
+        var token = linkedCancellation.Token;
         var stopwatch = Stopwatch.StartNew();
 
-        try
-        {
-            var modelNames = InvokeStringListAction(url, "modelNames");
-            if (modelNames.Contains(
-                    bundle.NoteTypeName,
-                    StringComparer.Ordinal))
-            {
-                var existingFields = InvokeStringListAction(
-                    url,
-                    "modelFieldNames",
-                    new { modelName = bundle.NoteTypeName });
+        try {
+            var modelNames = await InvokeStringListActionAsync(url,
+                                                               "modelNames",
+                                                               token)
+                                       .ConfigureAwait(false);
+            if (modelNames.Contains(bundle.NoteTypeName,
+                                    StringComparer.Ordinal)) {
+                var existingFields
+                          = await InvokeStringListActionAsync(
+                                      url,
+                                      "modelFieldNames",
+                                      new { modelName = bundle.NoteTypeName },
+                                      token)
+                                      .ConfigureAwait(false);
 
-                var missingFields = bundle.Fields
-                    .Where(field => !existingFields.Contains(
-                        field,
-                        StringComparer.Ordinal))
-                    .ToList();
+                var missingFields
+                          = bundle.Fields
+                                      .Where(field => !existingFields.Contains(
+                                                       field,
+                                                       StringComparer.Ordinal))
+                                      .ToList();
 
-                var existingTemplates = missingFields.Count == 0
-                    ? InvokeAction(
-                        url,
-                        "modelTemplates",
-                        new { modelName = bundle.NoteTypeName })
-                    : default;
-                var existingStyling = missingFields.Count == 0
-                    ? InvokeAction(
-                        url,
-                        "modelStyling",
-                        new { modelName = bundle.NoteTypeName })
-                    : default;
+                var existingTemplates
+                          = missingFields.Count == 0
+                                      ? await InvokeActionAsync(
+                                                  url,
+                                                  "modelTemplates",
+                                                  new { modelName
+                                                        = bundle.NoteTypeName },
+                                                  token)
+                                                  .ConfigureAwait(false)
+                                      : default;
+                var existingStyling
+                          = missingFields.Count == 0
+                                      ? await InvokeActionAsync(
+                                                  url,
+                                                  "modelStyling",
+                                                  new { modelName
+                                                        = bundle.NoteTypeName },
+                                                  token)
+                                                  .ConfigureAwait(false)
+                                      : default;
                 var isRecognizedJetHelperType
-                    = missingFields.Count == 0
-                      && IsRecognizedJetHelperNoteType(
-                          bundle,
-                          existingTemplates,
-                          existingStyling);
+                          = missingFields.Count == 0
+                            && IsRecognizedJetHelperNoteType(bundle,
+                                                             existingTemplates,
+                                                             existingStyling);
 
                 stopwatch.Stop();
 
-                if (missingFields.Count > 0)
-                {
+                if (missingFields.Count > 0) {
                     var incompatibleMessage
-                        = $"An Anki note type named \"{bundle.NoteTypeName}\" "
-                          + "already exists, but it is missing JETHelper fields: "
-                          + string.Join(", ", missingFields)
-                          + ". JETHelper left it unchanged.";
+                              = $"An Anki note type named \"{bundle.NoteTypeName}\" "
+                                + "already exists, but it is missing JETHelper "
+                                + "fields: " + string.Join(", ", missingFields)
+                                + ". JETHelper left it unchanged.";
 
                     diagnostics.Warning(
-                        "AnkiConnect",
-                        $"Optional note-type installation rejected after "
-                        + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
-                        + incompatibleMessage);
+                              "AnkiConnect",
+                              $"Optional note-type installation rejected after "
+                                        + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                                        + incompatibleMessage);
 
                     return AnkiTemplateInstallResult.Failed(
-                        incompatibleMessage,
-                        bundle.NoteTypeName);
+                              incompatibleMessage, bundle.NoteTypeName);
                 }
 
-                if (!isRecognizedJetHelperType)
-                {
+                if (!isRecognizedJetHelperType) {
                     var unrecognizedMessage
-                        = $"An Anki note type named \"{bundle.NoteTypeName}\" "
-                          + "already exists and has compatible fields, but its "
-                          + "templates are not recognized as JETHelper templates. "
-                          + "JETHelper left it unchanged. Rename the existing "
-                          + "note type before installing, or select it manually.";
+                              = $"An Anki note type named \"{bundle.NoteTypeName}\" "
+                                + "already exists and has compatible fields, "
+                                + "but its "
+                                + "templates are not recognized as JETHelper "
+                                + "templates. "
+                                + "JETHelper left it unchanged. Rename the "
+                                + "existing "
+                                + "note type before installing, or select it "
+                                + "manually.";
 
                     diagnostics.Warning(
-                        "AnkiConnect",
-                        $"Optional note-type installation stopped after "
-                        + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
-                        + unrecognizedMessage);
+                              "AnkiConnect",
+                              $"Optional note-type installation stopped after "
+                                        + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                                        + unrecognizedMessage);
 
                     return AnkiTemplateInstallResult.Failed(
-                        unrecognizedMessage,
-                        bundle.NoteTypeName);
+                              unrecognizedMessage, bundle.NoteTypeName);
                 }
 
                 var existingMessage
-                    = $"The JETHelper note type \"{bundle.NoteTypeName}\" "
-                      + "already exists. Its templates and styling were left "
-                      + "unchanged.";
+                          = $"The JETHelper note type \"{bundle.NoteTypeName}\" "
+                            + "already exists. Its templates and styling were "
+                            + "left " + "unchanged.";
 
                 diagnostics.Information(
-                    "AnkiConnect",
-                    $"Optional JETHelper note type already exists; no overwrite "
-                    + $"performed after "
-                    + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
-                    + $"note type={bundle.NoteTypeName}.");
+                          "AnkiConnect",
+                          $"Optional JETHelper note type already exists; no overwrite "
+                                    + $"performed after "
+                                    + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                                    + $"note type={bundle.NoteTypeName}.");
 
-                return AnkiTemplateInstallResult.Existing(
-                    existingMessage,
-                    bundle.NoteTypeName);
+                return AnkiTemplateInstallResult.Existing(existingMessage,
+                                                          bundle.NoteTypeName);
             }
 
-            var cardTemplates = new[]
-            {
-                new
-                {
-                    Name = bundle.CardTemplateName,
-                    Front = bundle.FrontTemplate,
-                    Back = bundle.BackTemplate
-                }
-            };
+            var cardTemplates = new[] { new { Name = bundle.CardTemplateName,
+                                              Front = bundle.FrontTemplate,
+                                              Back = bundle.BackTemplate } };
 
-            InvokeAction(
-                url,
-                "createModel",
-                new
-                {
-                    modelName = bundle.NoteTypeName,
-                    inOrderFields = bundle.Fields,
-                    css = bundle.Css,
-                    isCloze = false,
-                    cardTemplates
-                });
+            await InvokeActionAsync(url,
+                                    "createModel",
+                                    new { modelName = bundle.NoteTypeName,
+                                          inOrderFields = bundle.Fields,
+                                          css = bundle.Css,
+                                          isCloze = false,
+                                          cardTemplates },
+                                    token)
+                      .ConfigureAwait(false);
 
             stopwatch.Stop();
-
             diagnostics.Information(
-                "AnkiConnect",
-                $"Created optional note type in "
-                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
-                + $"note type={bundle.NoteTypeName}; "
-                + $"template version={JETHelperAnkiTemplates.TemplateVersion}.");
+                      "AnkiConnect",
+                      $"Created optional note type in "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                                + $"note type={bundle.NoteTypeName}; "
+                                + $"template version={JETHelperAnkiTemplates.TemplateVersion}.");
             return AnkiTemplateInstallResult.Created(
-                $"Created the note type \"{bundle.NoteTypeName}\".",
-                bundle.NoteTypeName);
+                      $"Created the note type \"{bundle.NoteTypeName}\".",
+                      bundle.NoteTypeName);
         }
-        catch (Exception ex)
-        {
+        catch (OperationCanceledException)
+                  when (token.IsCancellationRequested) {
             stopwatch.Stop();
-
-            diagnostics.Error(
-                "AnkiConnect",
-                $"Optional note-type installation failed after "
-                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
-                + $"note type={bundle.NoteTypeName}.",
-                ex);
+            diagnostics.Information(
+                      "AnkiConnect",
+                      $"Optional note-type installation cancelled after "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                                + $"note type={bundle.NoteTypeName}.");
 
             return AnkiTemplateInstallResult.Failed(
-                "Could not install the JETHelper note type: " + ex.Message,
-                bundle.NoteTypeName);
+                      "JETHelper note-type installation was cancelled.",
+                      bundle.NoteTypeName);
+        }
+        catch (Exception ex) {
+            stopwatch.Stop();
+            diagnostics.Error(
+                      "AnkiConnect",
+                      $"Optional note-type installation failed after "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms. "
+                                + $"note type={bundle.NoteTypeName}.",
+                      ex);
+
+            return AnkiTemplateInstallResult.Failed(
+                      "Could not install the JETHelper note type: "
+                                + ex.Message,
+                      bundle.NoteTypeName);
         }
     }
 
-    private AnkiAddResult
-    AddMappedNote(string url,
-                  string deckName,
-                  string modelName,
-                  IReadOnlyDictionary<string, string> valuesByRole,
-                  IReadOnlyDictionary<string, string> mappings,
-                  IReadOnlyCollection<string> requiredRoles,
-                  List<string> tags,
-                  string successMessage)
+    private async Task<AnkiAddResult>
+    AddMappedNoteAsync(string url,
+                       string deckName,
+                       string modelName,
+                       IReadOnlyDictionary<string, string> valuesByRole,
+                       IReadOnlyDictionary<string, string> mappings,
+                       IReadOnlyCollection<string> requiredRoles,
+                       List<string> tags,
+                       string successMessage,
+                       CancellationToken cancellationToken)
     {
+        using var linkedCancellation = CreateOperationCancellation(
+                  cancellationToken);
+        var token = linkedCancellation.Token;
         var stopwatch = Stopwatch.StartNew();
         var context = $"deck={deckName}; note type={modelName}";
 
-        if (string.IsNullOrWhiteSpace(deckName))
-        {
+        if (string.IsNullOrWhiteSpace(deckName)) {
             stopwatch.Stop();
             return FailWithDiagnostic(
-                "No Anki deck is selected. Choose one in /jetconfig.",
-                $"Add note rejected after "
-                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}.");
+                      "No Anki deck is selected. Choose one in /jetconfig.",
+                      $"Add note rejected after "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}.");
         }
 
-        if (string.IsNullOrWhiteSpace(modelName))
-        {
+        if (string.IsNullOrWhiteSpace(modelName)) {
             stopwatch.Stop();
             return FailWithDiagnostic(
-                "No Anki note type is selected. Choose one in /jetconfig.",
-                $"Add note rejected after "
-                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}.");
+                      "No Anki note type is selected. Choose one in "
+                                + "/jetconfig.",
+                      $"Add note rejected after "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}.");
         }
 
-        try
-        {
-            var modelFields = InvokeStringListAction(
-                url,
-                "modelFieldNames",
-                new { modelName });
+        try {
+            var modelFields = await InvokeStringListActionAsync(
+                                        url,
+                                        "modelFieldNames",
+                                        new { modelName },
+                                        token)
+                                        .ConfigureAwait(false);
 
-            var unmappedRequiredRoles = requiredRoles
-                .Where(role =>
-                    !mappings.TryGetValue(role, out var field)
-                    || string.IsNullOrWhiteSpace(field))
-                .ToList();
+            var unmappedRequiredRoles
+                      = requiredRoles
+                                  .Where(role => !mappings.TryGetValue(
+                                                           role, out var field)
+                                                 || string.IsNullOrWhiteSpace(
+                                                           field))
+                                  .ToList();
 
-            if (unmappedRequiredRoles.Count > 0)
-            {
+            if (unmappedRequiredRoles.Count > 0) {
                 stopwatch.Stop();
                 var message
-                    = "Required Anki field mappings are not configured: "
-                      + string.Join(", ", unmappedRequiredRoles)
-                      + ". Configure them in /jetcardconfig.";
+                          = "Required Anki field mappings are not configured: "
+                            + string.Join(", ", unmappedRequiredRoles)
+                            + ". Configure them in /jetcardconfig.";
 
                 return FailWithDiagnostic(
-                    message,
-                    $"Add note rejected after "
-                    + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}. "
-                    + message);
+                          message,
+                          $"Add note rejected after "
+                                    + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}. "
+                                    + message);
             }
 
-            var invalidRequiredMappings = requiredRoles
-                .Where(role => !modelFields.Contains(
-                    mappings[role],
-                    StringComparer.Ordinal))
-                .Select(role => $"{role} → {mappings[role]}")
-                .ToList();
+            var invalidRequiredMappings
+                      = requiredRoles
+                                  .Where(role => !modelFields.Contains(
+                                                   mappings[role],
+                                                   StringComparer.Ordinal))
+                                  .Select(role => $"{role} → {mappings[role]}")
+                                  .ToList();
 
-            if (invalidRequiredMappings.Count > 0)
-            {
+            if (invalidRequiredMappings.Count > 0) {
                 stopwatch.Stop();
-                var message
-                    = "The selected note type no longer contains required "
-                      + "mapped fields: "
-                      + string.Join(", ", invalidRequiredMappings)
-                      + ". Update the mappings in /jetcardconfig.";
+                var message = "The selected note type no longer contains "
+                              + "required " + "mapped fields: "
+                              + string.Join(", ", invalidRequiredMappings)
+                              + ". Update the mappings in /jetcardconfig.";
 
                 return FailWithDiagnostic(
-                    message,
-                    $"Add note rejected after "
-                    + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}. "
-                    + message);
+                          message,
+                          $"Add note rejected after "
+                                    + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}. "
+                                    + message);
             }
 
-            var activeMappings = mappings
-                .Where(pair =>
-                    !string.IsNullOrWhiteSpace(pair.Value)
-                    && modelFields.Contains(
-                        pair.Value,
-                        StringComparer.Ordinal))
-                .ToList();
+            var activeMappings
+                      = mappings.Where(pair => !string.IsNullOrWhiteSpace(
+                                                         pair.Value)
+                                               && modelFields.Contains(
+                                                         pair.Value,
+                                                         StringComparer
+                                                                   .Ordinal))
+                                  .ToList();
 
             var duplicateTargets = activeMappings
-                .GroupBy(
-                    pair => pair.Value,
-                    StringComparer.Ordinal)
-                .Where(group => group.Count() > 1)
-                .Select(group => group.Key)
-                .ToList();
+                                             .GroupBy(pair => pair.Value,
+                                                      StringComparer.Ordinal)
+                                             .Where(group => group.Count() > 1)
+                                             .Select(group => group.Key)
+                                             .ToList();
 
-            if (duplicateTargets.Count > 0)
-            {
+            if (duplicateTargets.Count > 0) {
                 stopwatch.Stop();
-                var message
-                    = "Multiple JETHelper data fields are mapped to the same "
-                      + "Anki field: "
-                      + string.Join(", ", duplicateTargets)
-                      + ". Give each mapping a unique target in "
-                      + "/jetcardconfig.";
+                var message = "Multiple JETHelper data fields are mapped to "
+                              + "the same " + "Anki field: "
+                              + string.Join(", ", duplicateTargets)
+                              + ". Give each mapping a unique target in "
+                              + "/jetcardconfig.";
 
                 return FailWithDiagnostic(
-                    message,
-                    $"Add note rejected after "
-                    + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}. "
-                    + message);
+                          message,
+                          $"Add note rejected after "
+                                    + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}. "
+                                    + message);
             }
 
             var fields = activeMappings.ToDictionary(
-                pair => pair.Value,
-                pair => valuesByRole.TryGetValue(pair.Key, out var value)
-                    ? value
-                    : string.Empty,
-                StringComparer.Ordinal);
+                      pair => pair.Value,
+                      pair => valuesByRole.TryGetValue(pair.Key, out var value)
+                                        ? value
+                                        : string.Empty,
+                      StringComparer.Ordinal);
 
-            var note = new
-            {
-                deckName,
-                modelName,
-                fields,
-                options = new
-                {
-                    allowDuplicate = false,
-                    duplicateScope = "deck"
-                },
-                tags
-            };
+            var note = new { deckName,
+                             modelName,
+                             fields,
+                             options = new { allowDuplicate = false,
+                                             duplicateScope = "deck" },
+                             tags };
 
-            var result = InvokeAction(url, "addNote", new { note });
+            var result = await InvokeActionAsync(
+                                   url, "addNote", new { note }, token)
+                                   .ConfigureAwait(false);
             stopwatch.Stop();
 
             diagnostics.Information(
-                "AnkiConnect",
-                $"Add note succeeded in "
-                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}.");
+                      "AnkiConnect",
+                      $"Add note succeeded in "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}.");
 
             return AnkiAddResult.Ok(successMessage, result.ToString());
         }
-        catch (Exception ex)
-        {
+        catch (OperationCanceledException)
+                  when (token.IsCancellationRequested) {
             stopwatch.Stop();
+            diagnostics.Information(
+                      "AnkiConnect",
+                      $"Add note cancelled after "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}.");
 
+            return AnkiAddResult.Fail("Anki card creation was cancelled.");
+        }
+        catch (Exception ex) {
+            stopwatch.Stop();
             diagnostics.Error(
-                "AnkiConnect",
-                $"Add note failed after "
-                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}.",
-                ex);
+                      "AnkiConnect",
+                      $"Add note failed after "
+                                + $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms; {context}.",
+                      ex);
 
-            return AnkiAddResult.Fail(
-                "Could not add card to Anki: " + ex.Message);
+            return AnkiAddResult.Fail("Could not add card to Anki: "
+                                      + ex.Message);
         }
     }
 
-    private AnkiAddResult FailWithDiagnostic(
-        string message,
-        string? diagnosticMessage = null)
+    private AnkiAddResult FailWithDiagnostic(string message,
+                                             string? diagnosticMessage = null)
     {
-        diagnostics.Warning(
-            "AnkiConnect",
-            diagnosticMessage ?? message);
+        diagnostics.Warning("AnkiConnect", diagnosticMessage ?? message);
         return AnkiAddResult.Fail(message);
     }
 
-    private List<string> InvokeStringListAction(
+    private Task<List<string>> InvokeStringListActionAsync(
               string url,
-              string action) => InvokeStringListAction(url, action, new { });
+              string action,
+              CancellationToken
+                        cancellationToken) => InvokeStringListActionAsync(url,
+                                                                          action,
+                                                                          new { },
+                                                                          cancellationToken);
 
-    private List<string>
-    InvokeStringListAction(string url, string action, object parameters)
+    private async Task<List<string>>
+    InvokeStringListActionAsync(string url,
+                                string action,
+                                object parameters,
+                                CancellationToken cancellationToken)
     {
-        var result = InvokeAction(url, action, parameters);
+        var result = await InvokeActionAsync(
+                               url, action, parameters, cancellationToken)
+                               .ConfigureAwait(false);
         if (result.ValueKind != JsonValueKind.Array)
             return [];
 
@@ -630,67 +721,101 @@ public sealed class AnkiService : IDisposable
                   .ToList();
     }
 
-    private JsonElement
-    InvokeAction(string url, string action, object parameters)
+    private async Task<JsonElement>
+    InvokeActionAsync(string url,
+                      string action,
+                      object parameters,
+                      CancellationToken cancellationToken)
     {
-        var payload = JsonSerializer.Serialize(new
-        {
-            action,
-            version = 6,
-            @params = parameters
+        var payload = JsonSerializer.Serialize(new {
+            action, version = 6, @params = parameters
         }, JsonOptions);
 
-        using var content = new StringContent(payload,
-                                              Encoding.UTF8,
-                                              "application/json");
-        using var response
-                  = httpClient.PostAsync(url, content).GetAwaiter().GetResult();
-        response.EnsureSuccessStatusCode();
+        using var request = new HttpRequestMessage(HttpMethod.Post, url) {
+            Content = new StringContent(
+                      payload, Encoding.UTF8, "application/json")
+        };
 
-        var json = response.Content.ReadAsStringAsync()
-                             .GetAwaiter()
-                             .GetResult();
-        var parsed = JsonSerializer.Deserialize<AnkiConnectResponse>(
-                               json, JsonOptions)
-                     ?? throw new InvalidOperationException(
-                               "AnkiConnect returned an empty response.");
+        try {
+            using var response
+                      = await httpClient
+                                  .SendAsync(request,
+                                             HttpCompletionOption
+                                                       .ResponseHeadersRead,
+                                             cancellationToken)
+                                  .ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
 
-        if (!string.IsNullOrWhiteSpace(parsed.Error))
-            throw new InvalidOperationException(parsed.Error);
+            var json = await response.Content
+                                 .ReadAsStringAsync(cancellationToken)
+                                 .ConfigureAwait(false);
+            var parsed = JsonSerializer.Deserialize<AnkiConnectResponse>(
+                                   json, JsonOptions)
+                         ?? throw new InvalidOperationException(
+                                   "AnkiConnect returned an empty response.");
 
-        return parsed.Result;
+            if (!string.IsNullOrWhiteSpace(parsed.Error))
+                throw new InvalidOperationException(parsed.Error);
+
+            return parsed.Result;
+        }
+        catch (OperationCanceledException ex)
+                  when (!cancellationToken.IsCancellationRequested) {
+            throw new TimeoutException(
+                      $"AnkiConnect did not respond within "
+                                + $"{httpClient.Timeout.TotalSeconds:0} seconds.",
+                      ex);
+        }
     }
 
-    private static bool IsRecognizedJetHelperNoteType(
-        AnkiTemplateBundle bundle,
-        JsonElement templates,
-        JsonElement styling)
+    private CancellationTokenSource
+    CreateOperationCancellation(CancellationToken cancellationToken)
+    {
+        lock (lifecycleLock)
+        {
+            if (disposed)
+                throw new ObjectDisposedException(nameof(AnkiService));
+
+            return CancellationTokenSource.CreateLinkedTokenSource(
+                      cancellationToken, disposeCancellation.Token);
+        }
+    }
+
+    private static AnkiConnectionResult
+    FailedConnectionResult(string message) => new(
+              Success: false,
+              Message: message,
+              DeckNames: [],
+              NoteTypeNames: [],
+              ModelFields: new Dictionary<string, List<string>>(
+                        StringComparer.Ordinal));
+
+    private static bool IsRecognizedJetHelperNoteType(AnkiTemplateBundle bundle,
+                                                      JsonElement templates,
+                                                      JsonElement styling)
     {
         if (templates.ValueKind != JsonValueKind.Object
-            || !templates.TryGetProperty(
-                bundle.CardTemplateName,
-                out var cardTemplate)
+            || !templates.TryGetProperty(bundle.CardTemplateName,
+                                         out var cardTemplate)
             || cardTemplate.ValueKind != JsonValueKind.Object)
             return false;
 
         var front = cardTemplate.TryGetProperty("Front", out var frontElement)
-            ? frontElement.GetString() ?? string.Empty
-            : string.Empty;
+                              ? frontElement.GetString() ?? string.Empty
+                              : string.Empty;
         var back = cardTemplate.TryGetProperty("Back", out var backElement)
-            ? backElement.GetString() ?? string.Empty
-            : string.Empty;
+                             ? backElement.GetString() ?? string.Empty
+                             : string.Empty;
         var css = styling.ValueKind == JsonValueKind.Object
-                  && styling.TryGetProperty("css", out var cssElement)
-            ? cssElement.GetString() ?? string.Empty
-            : string.Empty;
+                                      && styling.TryGetProperty(
+                                                "css", out var cssElement)
+                            ? cssElement.GetString() ?? string.Empty
+                            : string.Empty;
 
         return front.Contains(bundle.TemplateMarker, StringComparison.Ordinal)
-               && back.Contains(
-                   bundle.TemplateMarker,
-                   StringComparison.Ordinal)
-               && css.Contains(
-                   "JETHelper Anki templates",
-                   StringComparison.Ordinal);
+               && back.Contains(bundle.TemplateMarker, StringComparison.Ordinal)
+               && css.Contains("JETHelper Anki templates",
+                               StringComparison.Ordinal);
     }
 
     private static string BuildFuriganaField(VocabularyCardData vocab)
@@ -744,8 +869,7 @@ public sealed class AnkiService : IDisposable
             "jethelper", "ffxiv", cardType
         };
 
-        foreach (var tag in sourceTags)
-        {
+        foreach (var tag in sourceTags) {
             var cleaned = tag.Trim().Replace(' ', '_').Replace('/', '_');
             if (!string.IsNullOrWhiteSpace(cleaned))
                 tags.Add(cleaned);
@@ -757,8 +881,7 @@ public sealed class AnkiService : IDisposable
     private static string
     Html(string value) => System.Net.WebUtility.HtmlEncode(value);
 
-    private sealed class AnkiConnectResponse
-    {
+    private sealed class AnkiConnectResponse {
         public JsonElement Result { get; set; }
         public string? Error { get; set; }
     }

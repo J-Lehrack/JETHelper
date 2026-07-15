@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Threading;
+using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using JETHelper.Anki.Models;
@@ -14,24 +16,37 @@ namespace JETHelper.Windows;
 /// <summary>
 /// Draws the plugin settings window.
 /// </summary>
-public class ConfigWindow : Window, IDisposable {
-    private static readonly(
+public class ConfigWindow : Window, IDisposable
+{
+    private static readonly (
               string Name,
               int VirtualKey)[] HotkeyOptions = BuildHotkeyOptions();
 
     private readonly Plugin plugin;
     private readonly Configuration configuration;
+    private readonly object ankiOperationLock = new();
+    private readonly CancellationTokenSource lifetimeCancellation = new();
     private string dictionaryFolderPath;
     private string ankiConnectUrl;
     private AnkiConnectionResult? lastAnkiResult;
     private string recommendedDeckStatus = string.Empty;
     private string vocabularyTemplateStatus = string.Empty;
     private string kanjiTemplateStatus = string.Empty;
+    private bool disposed;
+    private bool ankiRefreshInProgress;
+    private bool recommendedDeckCreationInProgress;
+    private bool vocabularyTemplateInstallInProgress;
+    private bool kanjiTemplateInstallInProgress;
+    private AnkiConnectionResult? pendingAnkiRefreshResult;
+    private DeckCreationCompletion? pendingDeckCreation;
+    private TemplateInstallCompletion? pendingVocabularyTemplateInstall;
+    private TemplateInstallCompletion? pendingKanjiTemplateInstall;
 
     public ConfigWindow(Plugin plugin) :
           base("JETHelper Settings###JETHelperConfig")
     {
-        SizeConstraints = new WindowSizeConstraints {
+        SizeConstraints = new WindowSizeConstraints
+        {
             MinimumSize = new Vector2(500, 520),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
         };
@@ -44,11 +59,16 @@ public class ConfigWindow : Window, IDisposable {
 
     public void Dispose()
     {
-        // No unmanaged resources yet.
+        lock (ankiOperationLock)
+            disposed = true;
+
+        lifetimeCancellation.Cancel();
+        lifetimeCancellation.Dispose();
     }
 
     public override void Draw()
     {
+        ApplyPendingAnkiOperationResults();
         DrawHotkeySettings();
         ImGui.Separator();
         DrawDictionarySettings();
@@ -67,7 +87,8 @@ public class ConfigWindow : Window, IDisposable {
         ImGui.Spacing();
 
         var enabled = configuration.ClipboardHotkeyEnabled;
-        if (ImGui.Checkbox("Enable clipboard hotkey", ref enabled)) {
+        if (ImGui.Checkbox("Enable clipboard hotkey", ref enabled))
+        {
             configuration.ClipboardHotkeyEnabled = enabled;
             configuration.Save();
         }
@@ -76,21 +97,24 @@ public class ConfigWindow : Window, IDisposable {
         ImGui.SameLine();
 
         var requiresCtrl = configuration.ClipboardHotkeyRequiresCtrl;
-        if (ImGui.Checkbox("Ctrl", ref requiresCtrl)) {
+        if (ImGui.Checkbox("Ctrl", ref requiresCtrl))
+        {
             configuration.ClipboardHotkeyRequiresCtrl = requiresCtrl;
             configuration.Save();
         }
 
         ImGui.SameLine();
         var requiresAlt = configuration.ClipboardHotkeyRequiresAlt;
-        if (ImGui.Checkbox("Alt", ref requiresAlt)) {
+        if (ImGui.Checkbox("Alt", ref requiresAlt))
+        {
             configuration.ClipboardHotkeyRequiresAlt = requiresAlt;
             configuration.Save();
         }
 
         ImGui.SameLine();
         var requiresShift = configuration.ClipboardHotkeyRequiresShift;
-        if (ImGui.Checkbox("Shift", ref requiresShift)) {
+        if (ImGui.Checkbox("Shift", ref requiresShift))
+        {
             configuration.ClipboardHotkeyRequiresShift = requiresShift;
             configuration.Save();
         }
@@ -104,11 +128,14 @@ public class ConfigWindow : Window, IDisposable {
 
         var currentKeyName = GetHotkeyName(
                   configuration.ClipboardHotkeyVirtualKey);
-        if (ImGui.BeginCombo("##ClipboardLookupKey", currentKeyName)) {
-            foreach (var option in HotkeyOptions) {
+        if (ImGui.BeginCombo("##ClipboardLookupKey", currentKeyName))
+        {
+            foreach (var option in HotkeyOptions)
+            {
                 var selected = option.VirtualKey
                                == configuration.ClipboardHotkeyVirtualKey;
-                if (ImGui.Selectable(option.Name, selected)) {
+                if (ImGui.Selectable(option.Name, selected))
+                {
                     configuration.ClipboardHotkeyVirtualKey = option.VirtualKey;
                     configuration.Save();
                 }
@@ -137,7 +164,8 @@ public class ConfigWindow : Window, IDisposable {
                         ref dictionaryFolderPath,
                         1024);
 
-        if (ImGui.Button("Save Dictionary Path")) {
+        if (ImGui.Button("Save Dictionary Path"))
+        {
             configuration.DictionaryFolderPath = dictionaryFolderPath.Trim()
                                                            .Trim('"');
             configuration.Save();
@@ -145,7 +173,8 @@ public class ConfigWindow : Window, IDisposable {
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("Clear Dictionary Path")) {
+        if (ImGui.Button("Clear Dictionary Path"))
+        {
             dictionaryFolderPath = string.Empty;
             configuration.DictionaryFolderPath = string.Empty;
             configuration.Save();
@@ -185,18 +214,23 @@ public class ConfigWindow : Window, IDisposable {
                   + $"{problemCount} skipped/unsupported, "
                   + $"{loaderErrors.Count} load error(s))");
 
-        if (loaderErrors.Count > 0) {
+        if (loaderErrors.Count > 0)
+        {
             ImGui.TextWrapped("Some dictionary banks failed while loading. "
                               + "Working sources remain available; open "
                               + "/jetdebug for technical details.");
         }
 
-        if (ImGui.TreeNodeEx("Detected dictionary sources")) {
-            if (sources.Count == 0) {
+        if (ImGui.TreeNodeEx("Detected dictionary sources"))
+        {
+            if (sources.Count == 0)
+            {
                 ImGui.TextDisabled("No dictionary ZIP files were detected.");
             }
-            else {
-                foreach (var source in sources) {
+            else
+            {
+                foreach (var source in sources)
+                {
                     var details
                               = source.IsUsable
                                           ? $"{source.Status}; {source.DataKinds}; "
@@ -213,11 +247,13 @@ public class ConfigWindow : Window, IDisposable {
                 }
             }
 
-            if (duplicateDecisions.Count > 0) {
+            if (duplicateDecisions.Count > 0)
+            {
                 ImGui.Spacing();
                 ImGui.TextUnformatted("Duplicate copies resolved");
 
-                foreach (var decision in duplicateDecisions) {
+                foreach (var decision in duplicateDecisions)
+                {
                     ImGui.BulletText(decision.Preferred.DisplayName);
                     ImGui.TextWrapped("  Using: "
                                       + decision.Preferred.FilePath);
@@ -231,16 +267,19 @@ public class ConfigWindow : Window, IDisposable {
                 }
             }
 
-            if (revisionGroups.Count > 0) {
+            if (revisionGroups.Count > 0)
+            {
                 ImGui.Spacing();
                 ImGui.TextUnformatted("Multiple revisions loaded");
                 ImGui.TextDisabled(
                           "Different revisions are treated as separate sources "
                           + "rather than silently replacing one another.");
 
-                foreach (var group in revisionGroups) {
+                foreach (var group in revisionGroups)
+                {
                     ImGui.BulletText(group.DisplayName);
-                    foreach (var source in group.Sources) {
+                    foreach (var source in group.Sources)
+                    {
                         ImGui.TextDisabled(
                                   $"  Revision {EmptyDash(source.Revision)} — {source.Origin}: {source.FilePath}");
                     }
@@ -253,36 +292,56 @@ public class ConfigWindow : Window, IDisposable {
 
     private void DrawAnkiSettings()
     {
+        var operationState = GetAnkiConfigOperationState();
+
         ImGui.TextWrapped("Connect to Anki, select where vocabulary and kanji "
                           + "cards should be saved, then map JETHelper data to "
                           + "the fields used by each note type.");
         ImGui.Spacing();
 
         ImGui.TextUnformatted("AnkiConnect URL");
+        if (operationState.AnyActive)
+            ImGui.BeginDisabled();
+
         ImGui.SetNextItemWidth(415f);
         ImGui.InputText("##AnkiConnectUrl", ref ankiConnectUrl, 256);
 
-        if (ImGui.Button("Save Anki URL")) {
+        if (ImGui.Button("Save Anki URL"))
+        {
             configuration.AnkiConnectUrl = ankiConnectUrl.Trim();
             configuration.Save();
         }
+
+        if (operationState.AnyActive)
+            ImGui.EndDisabled();
 
         ImGui.SameLine();
-        if (ImGui.Button("Refresh / Test AnkiConnect")) {
+        if (operationState.AnyActive)
+            ImGui.BeginDisabled();
+
+        var refreshButtonText = operationState.Refreshing
+            ? "Connecting..."
+            : "Refresh / Test AnkiConnect";
+        if (ImGui.Button(refreshButtonText))
+        {
             configuration.AnkiConnectUrl = ankiConnectUrl.Trim();
             configuration.Save();
-            lastAnkiResult = plugin.AnkiService.TestConnection(configuration);
-
-            if (lastAnkiResult.Success)
-                ApplyFirstRunSelectionsAndMappings(lastAnkiResult);
+            StartAnkiRefresh();
         }
+
+        if (operationState.AnyActive)
+            ImGui.EndDisabled();
+
+        if (!string.IsNullOrWhiteSpace(operationState.StatusText))
+            ImGui.TextDisabled(operationState.StatusText);
 
         ImGui.Spacing();
 
         var decks = lastAnkiResult?.DeckNames ?? [];
         var noteTypes = lastAnkiResult?.NoteTypeNames ?? [];
 
-        if (lastAnkiResult is null) {
+        if (lastAnkiResult is null)
+        {
             ImGui.TextDisabled("Refresh AnkiConnect to populate deck, note "
                                + "type, and field dropdowns.");
             ImGui.TextWrapped(
@@ -302,10 +361,14 @@ public class ConfigWindow : Window, IDisposable {
         // Vocabulary and kanji targets are parallel concepts, so present
         // them side-by-side. The table gives each side half of the available
         // width and keeps the vertical divider aligned across both rows.
+        if (operationState.AnyActive)
+            ImGui.BeginDisabled();
+
         if (ImGui.BeginTable("AnkiTargets",
                              2,
                              ImGuiTableFlags.SizingStretchSame
-                                       | ImGuiTableFlags.BordersInnerV)) {
+                                       | ImGuiTableFlags.BordersInnerV))
+        {
             ImGui.TableNextRow();
 
             ImGui.TableSetColumnIndex(0);
@@ -359,18 +422,28 @@ public class ConfigWindow : Window, IDisposable {
             ImGui.EndTable();
         }
 
-        ImGui.Spacing();
-        DrawOptionalJetHelperNoteTypes();
+        if (operationState.AnyActive)
+            ImGui.EndDisabled();
 
         ImGui.Spacing();
+        DrawOptionalJetHelperNoteTypes(operationState);
+
+        ImGui.Spacing();
+        if (operationState.AnyActive)
+            ImGui.BeginDisabled();
+
         if (ImGui.Button("Open Card Field Mappings"))
             plugin.OpenCardConfigUi();
+
+        if (operationState.AnyActive)
+            ImGui.EndDisabled();
 
         ImGui.SameLine();
         ImGui.TextDisabled("Also available with /jetcardconfig");
     }
 
-    private void DrawOptionalJetHelperNoteTypes()
+    private void DrawOptionalJetHelperNoteTypes(
+        AnkiConfigOperationState operationState)
     {
         if (!ImGui.TreeNodeEx("Optional JETHelper note types"))
             return;
@@ -380,42 +453,25 @@ public class ConfigWindow : Window, IDisposable {
                   + "types "
                   + "using the field names already supported by the plugin. "
                   + "Installation is opt-in and never overwrites an existing "
-                    + "note "
-                  + "type's templates or styling.");
+                  + "note type's templates or styling.");
 
         ImGui.Spacing();
         ImGui.TextWrapped("Recommended decks are created independently from "
                           + "note types, so "
                           + "a note-type naming conflict cannot prevent deck "
-                            + "creation.");
+                          + "creation.");
 
-        if (ImGui.Button("Create Recommended Decks", new Vector2(-1f, 0f))) {
-            var result = plugin.AnkiService.CreateRecommendedJetHelperDecks(
-                      configuration);
-            recommendedDeckStatus = result.Message;
+        if (operationState.AnyActive)
+            ImGui.BeginDisabled();
 
-            if (result.Success) {
-                lastAnkiResult = plugin.AnkiService.TestConnection(
-                          configuration);
+        var deckButtonText = operationState.CreatingDecks
+            ? "Creating Recommended Decks..."
+            : "Create Recommended Decks";
+        if (ImGui.Button(deckButtonText, new Vector2(-1f, 0f)))
+            StartRecommendedDeckCreation();
 
-                if (lastAnkiResult.Success) {
-                    configuration.VocabularyDeckName
-                              = JETHelperAnkiTemplates.VocabularyDeckName;
-                    configuration.KanjiDeckName = JETHelperAnkiTemplates
-                                                            .KanjiDeckName;
-                    configuration.Save();
-                    recommendedDeckStatus += " They are now selected for "
-                                             + "vocabulary and kanji "
-                                             + "card export.";
-                }
-                else {
-                    recommendedDeckStatus
-                              += " The decks were created or confirmed, but "
-                                 + "JETHelper "
-                                 + "could not refresh Anki's deck list.";
-                }
-            }
-        }
+        if (operationState.AnyActive)
+            ImGui.EndDisabled();
 
         if (!string.IsNullOrWhiteSpace(recommendedDeckStatus))
             ImGui.TextWrapped(recommendedDeckStatus);
@@ -430,30 +486,38 @@ public class ConfigWindow : Window, IDisposable {
         if (ImGui.BeginTable("JETHelperNoteTypeInstallers",
                              2,
                              ImGuiTableFlags.SizingStretchSame
-                                       | ImGuiTableFlags.BordersInnerV)) {
+                                       | ImGuiTableFlags.BordersInnerV))
+        {
             ImGui.TableNextRow();
 
             ImGui.TableSetColumnIndex(0);
-            if (ImGui.Button("Install Vocabulary Note Type",
-                             new Vector2(-1f, 0f))) {
-                var result = plugin.AnkiService
-                                       .InstallJetHelperVocabularyNoteType(
-                                                 configuration);
-                vocabularyTemplateStatus = result.Message;
-                ApplyInstalledTemplateSelection(result,
-                                                AnkiCardType.Vocabulary);
-            }
+            if (operationState.AnyActive)
+                ImGui.BeginDisabled();
+
+            var vocabularyButtonText = operationState.InstallingVocabulary
+                ? "Installing Vocabulary Note Type..."
+                : "Install Vocabulary Note Type";
+            if (ImGui.Button(vocabularyButtonText, new Vector2(-1f, 0f)))
+                StartTemplateInstallation(AnkiCardType.Vocabulary);
+
+            if (operationState.AnyActive)
+                ImGui.EndDisabled();
 
             if (!string.IsNullOrWhiteSpace(vocabularyTemplateStatus))
                 ImGui.TextWrapped(vocabularyTemplateStatus);
 
             ImGui.TableSetColumnIndex(1);
-            if (ImGui.Button("Install Kanji Note Type", new Vector2(-1f, 0f))) {
-                var result = plugin.AnkiService.InstallJetHelperKanjiNoteType(
-                          configuration);
-                kanjiTemplateStatus = result.Message;
-                ApplyInstalledTemplateSelection(result, AnkiCardType.Kanji);
-            }
+            if (operationState.AnyActive)
+                ImGui.BeginDisabled();
+
+            var kanjiButtonText = operationState.InstallingKanji
+                ? "Installing Kanji Note Type..."
+                : "Install Kanji Note Type";
+            if (ImGui.Button(kanjiButtonText, new Vector2(-1f, 0f)))
+                StartTemplateInstallation(AnkiCardType.Kanji);
+
+            if (operationState.AnyActive)
+                ImGui.EndDisabled();
 
             if (!string.IsNullOrWhiteSpace(kanjiTemplateStatus))
                 ImGui.TextWrapped(kanjiTemplateStatus);
@@ -465,23 +529,266 @@ public class ConfigWindow : Window, IDisposable {
         ImGui.TextDisabled(
                   "Templates use native Anki HTML/CSS and conditional fields. "
                   + "No JavaScript, remote fonts, or external web resources "
-                    + "are used.");
+                  + "are used.");
 
         ImGui.TreePop();
     }
 
-    private void
-    ApplyInstalledTemplateSelection(AnkiTemplateInstallResult installResult,
-                                    AnkiCardType cardType)
+    private void StartAnkiRefresh()
     {
+        lock (ankiOperationLock)
+        {
+            if (disposed || IsAnyAnkiConfigOperationActiveUnsafe())
+                return;
+
+            ankiRefreshInProgress = true;
+        }
+
+        _ = RunAnkiRefreshAsync();
+    }
+
+    private async Task RunAnkiRefreshAsync()
+    {
+        AnkiConnectionResult result;
+
+        try
+        {
+            result = await plugin.AnkiService.TestConnectionAsync(
+                configuration,
+                lifetimeCancellation.Token);
+        }
+        catch (Exception ex)
+        {
+            plugin.DiagnosticService.Error(
+                "AnkiConnect",
+                "Unexpected exception escaped the asynchronous connection "
+                + "refresh workflow.",
+                ex);
+            result = CreateUnexpectedConnectionFailure(ex);
+        }
+
+        lock (ankiOperationLock)
+        {
+            ankiRefreshInProgress = false;
+            if (!disposed)
+                pendingAnkiRefreshResult = result;
+        }
+    }
+
+    private void StartRecommendedDeckCreation()
+    {
+        lock (ankiOperationLock)
+        {
+            if (disposed || IsAnyAnkiConfigOperationActiveUnsafe())
+                return;
+
+            recommendedDeckCreationInProgress = true;
+            recommendedDeckStatus = string.Empty;
+        }
+
+        _ = RunRecommendedDeckCreationAsync();
+    }
+
+    private async Task RunRecommendedDeckCreationAsync()
+    {
+        AnkiDeckCreationResult result;
+        AnkiConnectionResult? refreshResult = null;
+
+        try
+        {
+            result = await plugin.AnkiService
+                                 .CreateRecommendedJetHelperDecksAsync(
+                                     configuration,
+                                     lifetimeCancellation.Token);
+
+            if (result.Success)
+                refreshResult = await plugin.AnkiService.TestConnectionAsync(
+                    configuration,
+                    lifetimeCancellation.Token);
+        }
+        catch (Exception ex)
+        {
+            plugin.DiagnosticService.Error(
+                "AnkiConnect",
+                "Unexpected exception escaped the asynchronous recommended "
+                + "deck workflow.",
+                ex);
+            result = AnkiDeckCreationResult.Failed(
+                "Could not create or confirm the recommended decks: "
+                + ex.Message,
+                []);
+        }
+
+        lock (ankiOperationLock)
+        {
+            recommendedDeckCreationInProgress = false;
+            if (!disposed)
+                pendingDeckCreation = new DeckCreationCompletion(
+                    result,
+                    refreshResult);
+        }
+    }
+
+    private void StartTemplateInstallation(AnkiCardType cardType)
+    {
+        lock (ankiOperationLock)
+        {
+            if (disposed || IsAnyAnkiConfigOperationActiveUnsafe())
+                return;
+
+            if (cardType == AnkiCardType.Vocabulary)
+            {
+                vocabularyTemplateInstallInProgress = true;
+                vocabularyTemplateStatus = string.Empty;
+            }
+            else
+            {
+                kanjiTemplateInstallInProgress = true;
+                kanjiTemplateStatus = string.Empty;
+            }
+        }
+
+        _ = RunTemplateInstallationAsync(cardType);
+    }
+
+    private async Task RunTemplateInstallationAsync(AnkiCardType cardType)
+    {
+        AnkiTemplateInstallResult result;
+        AnkiConnectionResult? refreshResult = null;
+
+        try
+        {
+            result = cardType == AnkiCardType.Vocabulary
+                ? await plugin.AnkiService
+                              .InstallJetHelperVocabularyNoteTypeAsync(
+                                  configuration,
+                                  lifetimeCancellation.Token)
+                : await plugin.AnkiService.InstallJetHelperKanjiNoteTypeAsync(
+                    configuration,
+                    lifetimeCancellation.Token);
+
+            if (result.Success)
+                refreshResult = await plugin.AnkiService.TestConnectionAsync(
+                    configuration,
+                    lifetimeCancellation.Token);
+        }
+        catch (Exception ex)
+        {
+            plugin.DiagnosticService.Error(
+                "AnkiConnect",
+                "Unexpected exception escaped the asynchronous optional "
+                + "note-type installation workflow.",
+                ex);
+            result = AnkiTemplateInstallResult.Failed(
+                "Could not install the JETHelper note type: " + ex.Message,
+                cardType == AnkiCardType.Vocabulary
+                    ? JETHelperAnkiTemplates.Vocabulary.NoteTypeName
+                    : JETHelperAnkiTemplates.Kanji.NoteTypeName);
+        }
+
+        var completion = new TemplateInstallCompletion(
+            result,
+            refreshResult,
+            cardType);
+
+        lock (ankiOperationLock)
+        {
+            if (cardType == AnkiCardType.Vocabulary)
+            {
+                vocabularyTemplateInstallInProgress = false;
+                if (!disposed)
+                    pendingVocabularyTemplateInstall = completion;
+            }
+            else
+            {
+                kanjiTemplateInstallInProgress = false;
+                if (!disposed)
+                    pendingKanjiTemplateInstall = completion;
+            }
+        }
+    }
+
+    private void ApplyPendingAnkiOperationResults()
+    {
+        AnkiConnectionResult? refreshResult;
+        DeckCreationCompletion? deckCompletion;
+        TemplateInstallCompletion? vocabularyCompletion;
+        TemplateInstallCompletion? kanjiCompletion;
+
+        lock (ankiOperationLock)
+        {
+            refreshResult = pendingAnkiRefreshResult;
+            pendingAnkiRefreshResult = null;
+            deckCompletion = pendingDeckCreation;
+            pendingDeckCreation = null;
+            vocabularyCompletion = pendingVocabularyTemplateInstall;
+            pendingVocabularyTemplateInstall = null;
+            kanjiCompletion = pendingKanjiTemplateInstall;
+            pendingKanjiTemplateInstall = null;
+        }
+
+        if (refreshResult is not null)
+        {
+            lastAnkiResult = refreshResult;
+            if (refreshResult.Success)
+                ApplyFirstRunSelectionsAndMappings(refreshResult);
+        }
+
+        if (deckCompletion is not null)
+            ApplyRecommendedDeckCompletion(deckCompletion);
+
+        if (vocabularyCompletion is not null)
+            ApplyInstalledTemplateSelection(vocabularyCompletion);
+
+        if (kanjiCompletion is not null)
+            ApplyInstalledTemplateSelection(kanjiCompletion);
+    }
+
+    private void ApplyRecommendedDeckCompletion(
+        DeckCreationCompletion completion)
+    {
+        recommendedDeckStatus = completion.Result.Message;
+        if (!completion.Result.Success)
+            return;
+
+        var refreshResult = completion.RefreshResult;
+        if (refreshResult is null || !refreshResult.Success)
+        {
+            recommendedDeckStatus
+                += " The decks were created or confirmed, but JETHelper "
+                   + "could not refresh Anki's deck list.";
+            return;
+        }
+
+        lastAnkiResult = refreshResult;
+        configuration.VocabularyDeckName
+            = JETHelperAnkiTemplates.VocabularyDeckName;
+        configuration.KanjiDeckName = JETHelperAnkiTemplates.KanjiDeckName;
+        configuration.Save();
+        recommendedDeckStatus
+            += " They are now selected for vocabulary and kanji card export.";
+    }
+
+    private void ApplyInstalledTemplateSelection(
+        TemplateInstallCompletion completion)
+    {
+        var installResult = completion.Result;
+        var cardType = completion.CardType;
+
+        if (cardType == AnkiCardType.Vocabulary)
+            vocabularyTemplateStatus = installResult.Message;
+        else
+            kanjiTemplateStatus = installResult.Message;
+
         if (!installResult.Success)
             return;
 
-        lastAnkiResult = plugin.AnkiService.TestConnection(configuration);
-        if (!lastAnkiResult.Success) {
+        var refreshResult = completion.RefreshResult;
+        if (refreshResult is null || !refreshResult.Success)
+        {
             var refreshMessage = " The note type operation succeeded, but "
-                                 + "JETHelper could not "
-                                 + "refresh Anki's deck and field lists.";
+                                 + "JETHelper could not refresh Anki's deck "
+                                 + "and field lists.";
             if (cardType == AnkiCardType.Vocabulary)
                 vocabularyTemplateStatus += refreshMessage;
             else
@@ -490,13 +797,17 @@ public class ConfigWindow : Window, IDisposable {
             return;
         }
 
-        if (cardType == AnkiCardType.Vocabulary) {
+        lastAnkiResult = refreshResult;
+
+        if (cardType == AnkiCardType.Vocabulary)
+        {
             configuration.VocabularyNoteTypeName = installResult.NoteTypeName;
             InitializeVocabularyMappingsForNewModel(
                       installResult.NoteTypeName,
                       GetModelFields(installResult.NoteTypeName));
         }
-        else {
+        else
+        {
             configuration.KanjiNoteTypeName = installResult.NoteTypeName;
             InitializeKanjiMappingsForNewModel(
                       installResult.NoteTypeName,
@@ -505,6 +816,34 @@ public class ConfigWindow : Window, IDisposable {
 
         configuration.Save();
     }
+
+    private AnkiConfigOperationState GetAnkiConfigOperationState()
+    {
+        lock (ankiOperationLock)
+        {
+            return new AnkiConfigOperationState(
+                ankiRefreshInProgress,
+                recommendedDeckCreationInProgress,
+                vocabularyTemplateInstallInProgress,
+                kanjiTemplateInstallInProgress);
+        }
+    }
+
+    private bool IsAnyAnkiConfigOperationActiveUnsafe()
+        => ankiRefreshInProgress
+           || recommendedDeckCreationInProgress
+           || vocabularyTemplateInstallInProgress
+           || kanjiTemplateInstallInProgress;
+
+    private static AnkiConnectionResult CreateUnexpectedConnectionFailure(
+        Exception ex)
+        => new(
+            Success: false,
+            Message: "Could not connect to AnkiConnect: " + ex.Message,
+            DeckNames: [],
+            NoteTypeNames: [],
+            ModelFields: new Dictionary<string, List<string>>(
+                StringComparer.Ordinal));
 
     private void DrawDiagnosticsSettings()
     {
@@ -614,7 +953,8 @@ public class ConfigWindow : Window, IDisposable {
     {
         if (string.IsNullOrWhiteSpace(
                       configuration.VocabularyMappingNoteTypeName)
-            && HasAnyVocabularyMapping()) {
+            && HasAnyVocabularyMapping())
+        {
             // Migration path for configurations saved before mapping ownership
             // was tracked. Existing user choices are assumed to belong to the
             // currently selected note type, then validated below.
@@ -622,7 +962,8 @@ public class ConfigWindow : Window, IDisposable {
         }
         else if (!string.Equals(configuration.VocabularyMappingNoteTypeName,
                                 modelName,
-                                StringComparison.Ordinal)) {
+                                StringComparison.Ordinal))
+        {
             InitializeVocabularyMappingsForNewModel(modelName, fields);
             return;
         }
@@ -653,12 +994,14 @@ public class ConfigWindow : Window, IDisposable {
                                                    IReadOnlyList<string> fields)
     {
         if (string.IsNullOrWhiteSpace(configuration.KanjiMappingNoteTypeName)
-            && HasAnyKanjiMapping()) {
+            && HasAnyKanjiMapping())
+        {
             configuration.KanjiMappingNoteTypeName = modelName;
         }
         else if (!string.Equals(configuration.KanjiMappingNoteTypeName,
                                 modelName,
-                                StringComparison.Ordinal)) {
+                                StringComparison.Ordinal))
+        {
             InitializeKanjiMappingsForNewModel(modelName, fields);
             return;
         }
@@ -802,7 +1145,8 @@ public class ConfigWindow : Window, IDisposable {
         ImGui.TextUnformatted(label);
         ImGui.SetNextItemWidth(-1f);
 
-        if (options.Count == 0) {
+        if (options.Count == 0)
+        {
             ImGui.BeginDisabled();
             if (ImGui.BeginCombo("##" + label, EmptyDash(currentValue)))
                 ImGui.EndCombo();
@@ -813,7 +1157,8 @@ public class ConfigWindow : Window, IDisposable {
         if (!ImGui.BeginCombo("##" + label, EmptyDash(currentValue)))
             return;
 
-        foreach (var option in options.OrderBy(x => x)) {
+        foreach (var option in options.OrderBy(x => x))
+        {
             var isSelected = option == currentValue;
             if (ImGui.Selectable(option, isSelected))
                 onSelected(option);
@@ -872,6 +1217,38 @@ public class ConfigWindow : Window, IDisposable {
         ]);
 
         return options.ToArray();
+    }
+
+    private sealed record DeckCreationCompletion(
+        AnkiDeckCreationResult Result,
+        AnkiConnectionResult? RefreshResult);
+
+    private sealed record TemplateInstallCompletion(
+        AnkiTemplateInstallResult Result,
+        AnkiConnectionResult? RefreshResult,
+        AnkiCardType CardType);
+
+    private sealed record AnkiConfigOperationState(
+        bool Refreshing,
+        bool CreatingDecks,
+        bool InstallingVocabulary,
+        bool InstallingKanji)
+    {
+        public bool AnyActive
+            => Refreshing
+               || CreatingDecks
+               || InstallingVocabulary
+               || InstallingKanji;
+
+        public string StatusText
+            => Refreshing ? "Connecting to AnkiConnect..."
+               : CreatingDecks
+                   ? "Creating recommended decks and refreshing Anki..."
+               : InstallingVocabulary
+                   ? "Installing the vocabulary note type and refreshing Anki..."
+               : InstallingKanji
+                   ? "Installing the kanji note type and refreshing Anki..."
+               : string.Empty;
     }
 
     private static string

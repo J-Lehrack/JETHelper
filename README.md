@@ -2,7 +2,7 @@
 
 JETHelper is a Dalamud plugin for Japanese learners playing FINAL FANTASY XIV. It turns copied or manually entered Japanese text into vocabulary and kanji lookup results, then sends selected entries to configurable Anki decks through AnkiConnect.
 
-> **Project status:** Functional alpha. The core lookup-to-Anki workflow, bundled dictionaries, diagnostics, and optional Anki note types are implemented, but asynchronous Anki operations, deinflection, candidate ranking, and media fields still need refinement before a general release.
+> **Project status:** Functional alpha. The core lookup-to-Anki workflow, bundled dictionaries, diagnostics, optional Anki note types, and non-blocking AnkiConnect operations are implemented. Background dictionary loading, deinflection, candidate ranking, and media fields still need refinement before a general release.
 
 ## Current features
 
@@ -87,6 +87,8 @@ The note-type installers create new note types only. If an exact-name note type 
 
 The bundled templates use only local HTML and CSS. They contain no JavaScript, remote fonts, or external web resources.
 
+AnkiConnect refresh, card creation, recommended-deck creation, and optional note-type installation run asynchronously. JETHelper shows an in-progress state and disables the active action so a slow or unavailable Anki instance does not freeze the game UI or receive duplicate requests.
+
 ## Privacy and network behavior
 
 - Clipboard text is read only when the user explicitly triggers a lookup.
@@ -103,7 +105,7 @@ Use `/jetdebug` to view dictionary-service health, recent structured events, and
 - Deinflection currently handles only a limited set of common conjugations.
 - Vocabulary candidate detection is intentionally permissive and may show substring matches.
 - Audio, pitch-accent diagrams, and kanji stroke diagrams are not yet populated.
-- AnkiConnect requests are currently synchronous and can cause a brief stutter when Anki is unavailable.
+- Dictionary discovery, validation, and first-use indexing are currently synchronous and can cause noticeable pauses with large dictionary collections.
 - Direct reading of selected chat text is not implemented; the current workflow uses copied text.
 
 ## Building from source
@@ -124,7 +126,7 @@ JETHelper/bin/x64/Debug/JETHelper.dll
 
 ## Roadmap
 
-Near-term work includes asynchronous AnkiConnect operations, stronger deinflection, better candidate ranking, and continued card-template testing and refinement.
+Near-term work includes background dictionary discovery/indexing with memory benchmarks, stronger deinflection, better candidate ranking, and continued workflow refinement.
 
 ## License
 
