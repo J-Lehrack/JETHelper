@@ -21,40 +21,49 @@ namespace JETHelper;
 /// - Our own services, such as lookup and clipboard handling.
 /// - Our windows, such as the main lookup window and config window.
 /// </summary>
-public sealed class Plugin : IDalamudPlugin {
+public sealed class Plugin : IDalamudPlugin
+{
     // These properties are filled in by Dalamud because of the [PluginService]
     // attribute. The "null!" tells C# that Dalamud will assign these before we
     // use them.
     [PluginService]
-    internal static IDalamudPluginInterface PluginInterface {
+    internal static IDalamudPluginInterface PluginInterface
+    {
         get; private set;
     } = null!;
     [PluginService]
-    internal static ICommandManager CommandManager {
+    internal static ICommandManager CommandManager
+    {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IClientState ClientState {
+    internal static IClientState ClientState
+    {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IPlayerState PlayerState {
+    internal static IPlayerState PlayerState
+    {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IDataManager DataManager {
+    internal static IDataManager DataManager
+    {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IPluginLog Log {
+    internal static IPluginLog Log
+    {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IKeyState KeyState {
+    internal static IKeyState KeyState
+    {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IFramework Framework {
+    internal static IFramework Framework
+    {
         get; private set;
     } = null!;
 
@@ -135,21 +144,24 @@ public sealed class Plugin : IDalamudPlugin {
         // Register slash commands with Dalamud.
         CommandManager.AddHandler(
                   MainCommandName,
-                  new CommandInfo(OnMainCommand) {
+                  new CommandInfo(OnMainCommand)
+                  {
                       HelpMessage = "Open the JETHelper lookup window. Add "
                                     + "text after the command to process it."
                   });
 
         CommandManager.AddHandler(
                   LookupCommandName,
-                  new CommandInfo(OnLookupCommand) {
+                  new CommandInfo(OnLookupCommand)
+                  {
                       HelpMessage = "Process the text after the command. "
                                     + "Example: /jetlookup 食べる"
                   });
 
         CommandManager.AddHandler(
                   ClipboardCommandName,
-                  new CommandInfo(OnClipboardCommand) {
+                  new CommandInfo(OnClipboardCommand)
+                  {
                       HelpMessage
                       = "Process the current clipboard text. Example flow: "
                         + "copy Japanese text, then run /jetclip"
@@ -157,27 +169,31 @@ public sealed class Plugin : IDalamudPlugin {
 
         CommandManager.AddHandler(
                   ConfigCommandName,
-                  new CommandInfo(OnConfigCommand) {
+                  new CommandInfo(OnConfigCommand)
+                  {
                       HelpMessage = "Open the JETHelper settings window."
                   });
 
         CommandManager.AddHandler(
                   CardConfigCommandName,
-                  new CommandInfo(OnCardConfigCommand) {
+                  new CommandInfo(OnCardConfigCommand)
+                  {
                       HelpMessage
                       = "Open the JETHelper Anki card field-mapping window."
                   });
 
         CommandManager.AddHandler(
                   AcknowledgementsCommandName,
-                  new CommandInfo(OnAcknowledgementsCommand) {
+                  new CommandInfo(OnAcknowledgementsCommand)
+                  {
                       HelpMessage = "Open JETHelper acknowledgements, "
                                     + "licences, and data-source information."
                   });
 
         CommandManager.AddHandler(
                   DiagnosticsCommandName,
-                  new CommandInfo(OnDiagnosticsCommand) {
+                  new CommandInfo(OnDiagnosticsCommand)
+                  {
                       HelpMessage
                       = "Open JETHelper diagnostics, service health, "
                         + "and local log controls."
@@ -214,6 +230,7 @@ public sealed class Plugin : IDalamudPlugin {
         DiagnosticsWindow.Dispose();
         MainWindow.Dispose();
         AnkiService.Dispose();
+        LookupService.Dispose();
         DiagnosticService.Dispose();
 
         CommandManager.RemoveHandler(MainCommandName);
@@ -234,7 +251,8 @@ public sealed class Plugin : IDalamudPlugin {
     {
         // If the user typed "/jet 食べる", process the argument directly.
         // If they typed only "/jet", open/close the lookup window.
-        if (!string.IsNullOrWhiteSpace(args)) {
+        if (!string.IsNullOrWhiteSpace(args))
+        {
             ProcessLookupText(args);
             return;
         }

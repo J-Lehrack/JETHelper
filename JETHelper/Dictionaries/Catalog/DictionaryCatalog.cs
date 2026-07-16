@@ -20,20 +20,29 @@ public sealed class DictionaryCatalog {
     private readonly List<DictionaryDuplicateDecision> duplicateDecisions;
     private readonly List<DictionaryRevisionGroup> revisionGroups;
 
-    public DictionaryCatalog(string? configuredDictionaryFolderPath)
+    public DictionaryCatalog(string? configuredDictionaryFolderPath) :
+          this(DictionaryPathResolver
+                         .FindDictionaryZipCandidates(
+                                   configuredDictionaryFolderPath)
+                         .Select(candidate => YomitanDictionaryInspector.Inspect(
+                                           candidate.FilePath,
+                                           candidate.Origin))
+                         .ToList())
     {
-        var inspected
-                  = DictionaryPathResolver
-                              .FindDictionaryZipCandidates(
-                                        configuredDictionaryFolderPath)
-                              .Select(candidate => YomitanDictionaryInspector.Inspect(
-                                                candidate.FilePath,
-                                                candidate.Origin))
-                              .ToList();
+    }
 
+    private DictionaryCatalog(IReadOnlyList<DictionarySource> inspected)
+    {
         sources = DeDuplicate(inspected, out duplicateDecisions);
         revisionGroups = FindMultipleRevisionGroups(sources);
     }
+
+    /// <summary>
+    /// Builds a catalog from sources that were already inspected by a
+    /// background reload operation.
+    /// </summary>
+    public static DictionaryCatalog FromInspectedSources(
+              IReadOnlyList<DictionarySource> inspected) => new(inspected);
 
     public IReadOnlyList<DictionarySource> Sources => sources;
 

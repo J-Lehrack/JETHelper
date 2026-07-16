@@ -15,7 +15,8 @@ namespace JETHelper.Lookup.Services;
 /// raw input -> cleaned text -> Japanese extraction -> dictionary/card-shaped
 /// data.
 /// </summary>
-public sealed class LookupService {
+public sealed class LookupService : System.IDisposable
+{
     private readonly Configuration configuration;
     private readonly DiagnosticService diagnostics;
     private readonly DictionaryManager dictionaryManager;
@@ -29,6 +30,9 @@ public sealed class LookupService {
     }
 
     public void ReloadDictionaries() => dictionaryManager.ReloadDictionaries();
+
+    public DictionaryReloadStatus
+              DictionaryReloadStatus => dictionaryManager.ReloadStatus;
 
     public IReadOnlyList<DictionarySource>
               DictionarySources => dictionaryManager.DictionarySources;
@@ -68,7 +72,8 @@ public sealed class LookupService {
         var vocabularyCandidates = new List<string>();
         var additionalKanji = new List<string>();
 
-        if (containsJapanese && !string.IsNullOrWhiteSpace(lookupText)) {
+        if (containsJapanese && !string.IsNullOrWhiteSpace(lookupText))
+        {
             // Collect vocabulary candidates from the original lookup text
             // first. The default vocabulary card uses the first dictionary
             // match in reading order, while buttons let the user change focus
@@ -94,7 +99,12 @@ public sealed class LookupService {
         var status = BuildStatusMessage(kind, vocabularyCard, kanjiCard);
         var dictionaryStatus = dictionaryManager.GetDictionaryStatusMessage();
         if (!string.IsNullOrWhiteSpace(dictionaryStatus))
-            status += " " + dictionaryStatus;
+        {
+            var reloadStatus = dictionaryManager.ReloadStatus;
+            status = reloadStatus.IsActive && !reloadStatus.HasActiveSnapshot
+                           ? dictionaryStatus
+                           : status + " " + dictionaryStatus;
+        }
 
         var vocabularySummary = vocabularyCard is null ? "none"
                                 : configuration.DiagnosticIncludeLookupText
@@ -112,7 +122,8 @@ public sealed class LookupService {
                             + $"vocabulary candidates={vocabularyCandidateDetails.Count}; "
                             + $"additional kanji={additionalKanji.Count}.");
 
-        return new LookupResult {
+        return new LookupResult
+        {
             RawText = rawText ?? string.Empty,
             CleanedText = cleaned,
             LookupText = lookupText,
@@ -147,7 +158,8 @@ public sealed class LookupService {
 
         var vocabularyCard = dictionaryManager.BuildVocabularyCard(
                   vocabularyCandidate, existing.CleanedText);
-        if (vocabularyCard is null) {
+        if (vocabularyCard is null)
+        {
             diagnostics.Warning("Lookup",
                                 "A selected vocabulary candidate no longer "
                                 + "produced a card result.");
@@ -180,7 +192,8 @@ public sealed class LookupService {
 
         var kanjiCard = dictionaryManager.BuildKanjiCard(kanjiCandidate,
                                                          existing.CleanedText);
-        if (kanjiCard is null) {
+        if (kanjiCard is null)
+        {
             diagnostics.Warning("Lookup",
                                 "A selected kanji candidate no longer produced "
                                 + "a card result.");
@@ -199,22 +212,23 @@ public sealed class LookupService {
                                            string source,
                                            string statusMessage,
                                            VocabularyCardData? vocabularyCard,
-                                           KanjiCardData? kanjiCard) => new() {
-        RawText = existing.RawText,
-        CleanedText = existing.CleanedText,
-        LookupText = existing.LookupText,
-        ContainsJapanese = existing.ContainsJapanese,
-        ContainsNonJapaneseLookupContent
+                                           KanjiCardData? kanjiCard) => new()
+                                           {
+                                               RawText = existing.RawText,
+                                               CleanedText = existing.CleanedText,
+                                               LookupText = existing.LookupText,
+                                               ContainsJapanese = existing.ContainsJapanese,
+                                               ContainsNonJapaneseLookupContent
         = existing.ContainsNonJapaneseLookupContent,
-        TextKind = existing.TextKind,
-        StatusMessage = statusMessage,
-        Source = source,
-        VocabularyCard = vocabularyCard,
-        KanjiCard = kanjiCard,
-        VocabularyCandidates = existing.VocabularyCandidates,
-        VocabularyCandidateDetails = existing.VocabularyCandidateDetails,
-        AdditionalKanjiCandidates = existing.AdditionalKanjiCandidates
-    };
+                                               TextKind = existing.TextKind,
+                                               StatusMessage = statusMessage,
+                                               Source = source,
+                                               VocabularyCard = vocabularyCard,
+                                               KanjiCard = kanjiCard,
+                                               VocabularyCandidates = existing.VocabularyCandidates,
+                                               VocabularyCandidateDetails = existing.VocabularyCandidateDetails,
+                                               AdditionalKanjiCandidates = existing.AdditionalKanjiCandidates
+                                           };
 
     private static string BuildStatusMessage(JapaneseTextKind kind,
                                              VocabularyCardData? vocabularyCard,
@@ -229,7 +243,8 @@ public sealed class LookupService {
         var hasVocab = vocabularyCard is not null;
         var hasKanji = kanjiCard is not null;
 
-        return (hasVocab, hasKanji) switch {
+        return (hasVocab, hasKanji) switch
+        {
             (true,
              true) => "Vocabulary and kanji dictionary results were found.",
             (true, false) => "Vocabulary result found. No kanji-card result "
@@ -241,4 +256,10 @@ public sealed class LookupService {
                  + "kanji."
         };
     }
+
+    public void Dispose()
+    {
+        dictionaryManager.Dispose();
+    }
+
 }

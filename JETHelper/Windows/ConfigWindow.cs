@@ -192,6 +192,7 @@ public class ConfigWindow : Window, IDisposable
         ImGui.TextDisabled(
                   $"Saved path exists: {(string.IsNullOrWhiteSpace(savedPath) ? "—" : exists ? "Yes" : "No")}");
 
+        var reloadStatus = plugin.LookupService.DictionaryReloadStatus;
         var sources = plugin.LookupService.DictionarySources;
         var duplicateDecisions = plugin.LookupService
                                            .DictionaryDuplicateDecisions;
@@ -200,13 +201,46 @@ public class ConfigWindow : Window, IDisposable
         var usableCount = sources.Count(source => source.IsUsable);
         var warningCount = sources.Count(source => source.HasWarnings);
         var problemCount = sources.Count(source => !source.IsUsable);
-        var health = usableCount == 0 ? "Not ready"
-                     : warningCount > 0 || problemCount > 0
-                                         || duplicateDecisions.Count > 0
-                                         || revisionGroups.Count > 0
-                                         || loaderErrors.Count > 0
-                               ? "Ready with warnings"
-                               : "Ready";
+
+        if (reloadStatus.IsActive)
+        {
+            var progress = reloadStatus.TotalSources > 0
+                                     ? $"{reloadStatus.ProcessedSources}/"
+                                       + $"{reloadStatus.TotalSources}"
+                                     : "—";
+            var current = string.IsNullOrWhiteSpace(
+                                      reloadStatus.CurrentSource)
+                                      ? string.Empty
+                                      : $" Current: "
+                                        + reloadStatus.CurrentSource;
+
+            ImGui.TextDisabled(
+                      $"Dictionary reload: {reloadStatus.StageLabel} "
+                      + $"({progress}).{current}");
+            ImGui.TextWrapped(reloadStatus.Message);
+        }
+        else if (!string.IsNullOrWhiteSpace(reloadStatus.Message))
+        {
+            ImGui.TextDisabled(
+                      $"Dictionary reload: {reloadStatus.StageLabel}");
+            ImGui.TextWrapped(reloadStatus.Message);
+        }
+
+        var health = reloadStatus.IsActive && usableCount == 0
+                           ? "Loading"
+                           : reloadStatus.IsActive
+                                     ? "Reloading; current snapshot active"
+                                     : usableCount == 0
+                                               ? "Not ready"
+                                               : warningCount > 0
+                                                         || problemCount > 0
+                                                         || duplicateDecisions.Count
+                                                                    > 0
+                                                         || revisionGroups.Count
+                                                                    > 0
+                                                         || loaderErrors.Count > 0
+                                                   ? "Ready with warnings"
+                                                   : "Ready";
 
         ImGui.TextDisabled(
                   $"Dictionary status: {health} ({usableCount} usable, "
