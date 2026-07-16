@@ -21,6 +21,15 @@ public sealed class AcknowledgementsWindow : Window, IDisposable {
               = "https://www.edrdg.org/wiki/index.php/KANJIDIC_Project";
     private const string YomitanConversionUrl
               = "https://github.com/yomidevs/jmdict-yomitan";
+    private const string JitenUrl = "https://jiten.moe/";
+    private const string JitenFrequencyUrl = "https://jiten.moe/other";
+    private const string CreativeCommonsBySaUrl
+              = "https://creativecommons.org/licenses/by-sa/4.0/";
+    private const string MarvDictionaryRepositoryUrl
+              = "https://github.com/MarvNC/yomitan-dictionaries";
+    private const string MarvDictionaryFolderUrl
+              = "https://drive.google.com/drive/folders/"
+                + "1LXMIOoaWASIntlx1w08njNU005lS5lez";
     private const string YomitanUrl = "https://github.com/themoeway/yomitan";
     private const string AnkiUrl = "https://apps.ankiweb.net/";
     private const string AnkiConnectUrl
@@ -55,6 +64,8 @@ public sealed class AcknowledgementsWindow : Window, IDisposable {
         DrawSectionSeparator();
         DrawUpdateSection();
         DrawSectionSeparator();
+        DrawCommunityDictionarySection();
+        DrawSectionSeparator();
         DrawRelatedProjectsSection();
         DrawSectionSeparator();
         DrawContributorsSection();
@@ -68,19 +79,16 @@ public sealed class AcknowledgementsWindow : Window, IDisposable {
         ImGui.BulletText("JMdict (English) — vocabulary and reading data");
         ImGui.BulletText(
                   "KANJIDIC/KANJIDIC2 (English) — kanji meanings and readings");
+        ImGui.BulletText("Jiten Frequency Global — global Japanese "
+                         + "word-frequency ranks");
         ImGui.Spacing();
 
         ImGui.TextWrapped(
-                  "The underlying data is maintained by the Electronic "
-                  + "Dictionary "
-                  + "Research and Development Group (EDRDG). The bundled "
-                  + "Yomitan-compatible archives are obtained from the "
-                  + "community-maintained yomidevs/jmdict-yomitan releases.");
-        ImGui.TextWrapped("JETHelper does not claim ownership of the bundled "
-                          + "dictionary "
-                          + "data. The archives remain subject to their "
-                            + "applicable terms "
-                          + "and attribution requirements.");
+                  "JMdict and KANJIDIC/KANJIDIC2 are maintained by the "
+                  + "Electronic Dictionary Research and Development Group "
+                  + "(EDRDG). Their bundled Yomitan-compatible archives are "
+                  + "obtained from the community-maintained "
+                  + "yomidevs/jmdict-yomitan releases.");
         ImGui.Spacing();
 
         DrawLinkButton("EDRDG website", EdrdgWebsiteUrl);
@@ -91,20 +99,57 @@ public sealed class AcknowledgementsWindow : Window, IDisposable {
         ImGui.SameLine();
         DrawLinkButton("KANJIDIC project", KanjidicProjectUrl);
 
-        DrawLinkButton("Yomitan dictionary releases", YomitanConversionUrl);
+        DrawLinkButton("JMdict/KANJIDIC releases", YomitanConversionUrl);
+
+        ImGui.Spacing();
+        ImGui.TextWrapped(
+                  "Jiten Frequency Global is created and maintained by the "
+                  + "Jiten project. Jiten states that its downloadable "
+                  + "frequency lists are licensed under CC BY-SA 4.0.");
+        ImGui.Spacing();
+
+        DrawLinkButton("Jiten", JitenUrl);
+        ImGui.SameLine();
+        DrawLinkButton("Jiten frequency lists", JitenFrequencyUrl);
+        ImGui.SameLine();
+        DrawLinkButton("CC BY-SA 4.0", CreativeCommonsBySaUrl);
+
+        ImGui.Spacing();
+        ImGui.TextWrapped(
+                  "JETHelper does not claim ownership of the bundled "
+                  + "dictionary data. Each archive remains subject to its "
+                  + "applicable terms and attribution requirements.");
     }
 
     private static void DrawUpdateSection()
     {
         ImGui.TextUnformatted("Dictionary updates");
         ImGui.TextWrapped(
-                  "Bundled JMdict and KANJIDIC snapshots may be refreshed with "
-                  + "future JETHelper releases. Users may also select an "
-                    + "additional "
-                  + "compatible dictionary folder through /jetconfig.");
-        ImGui.TextWrapped("User-supplied dictionaries are not distributed by "
-                          + "JETHelper and "
-                          + "remain subject to their respective terms.");
+                  "Bundled JMdict, KANJIDIC, and Jiten Frequency Global "
+                  + "snapshots may be refreshed with future JETHelper "
+                  + "releases. Users may also select an additional compatible "
+                  + "dictionary folder through /jetconfig.");
+        ImGui.TextWrapped(
+                  "User-supplied dictionaries are not distributed by "
+                  + "JETHelper and remain subject to their respective terms.");
+    }
+
+    private static void DrawCommunityDictionarySection()
+    {
+        ImGui.TextUnformatted("Community dictionary resources");
+        ImGui.TextWrapped(
+                  "Users looking for additional compatible dictionaries may "
+                  + "consult MarvNC's community collection. Only JETHelper's "
+                  + "explicitly bundled dictionaries have been reviewed for "
+                  + "JETHelper distribution and tested as its supported "
+                  + "baseline. Other downloads are used at the user's "
+                  + "discretion.");
+        ImGui.Spacing();
+
+        DrawLinkButton("MarvNC dictionary repository",
+                       MarvDictionaryRepositoryUrl);
+        ImGui.SameLine();
+        DrawLinkButton("MarvNC download folder", MarvDictionaryFolderUrl);
     }
 
     private static void DrawRelatedProjectsSection()
@@ -126,15 +171,15 @@ public sealed class AcknowledgementsWindow : Window, IDisposable {
         ImGui.TextWrapped(
                   "JETHelper was created by Ardianell (@J-Lehrack on GitHub). "
                   + "Additional contributors will be acknowledged as the "
-                    + "project grows.");
+                  + "project grows.");
     }
 
     private static void DrawJetHelperSection()
     {
         ImGui.TextUnformatted("JETHelper source code");
-        ImGui.TextWrapped("JETHelper's source code is licensed under the GNU "
-                          + "Affero General "
-                          + "Public License version 3.0 or later.");
+        ImGui.TextWrapped(
+                  "JETHelper's source code is licensed under the GNU Affero "
+                  + "General Public License version 3.0 or later.");
         ImGui.Spacing();
         DrawLinkButton("JETHelper repository", JetHelperRepositoryUrl);
     }

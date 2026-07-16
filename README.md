@@ -2,7 +2,7 @@
 
 JETHelper is a Dalamud plugin for Japanese learners playing FINAL FANTASY XIV. It turns copied or manually entered Japanese text into vocabulary and kanji lookup results, then sends selected entries to configurable Anki decks through AnkiConnect.
 
-> **Project status:** Functional alpha. The core lookup-to-Anki workflow, bundled dictionaries, diagnostics, optional Anki note types, and non-blocking AnkiConnect operations are implemented. Background dictionary loading, deinflection, candidate ranking, and media fields still need refinement before a general release.
+> **Project status:** Functional alpha. The core lookup-to-Anki workflow, bundled dictionaries, diagnostics, optional Anki note types, non-blocking AnkiConnect operations, and background dictionary discovery/validation are implemented. Background dictionary parsing/indexing, deinflection, candidate ranking, and media fields still need refinement before a general release.
 
 ## Current features
 
@@ -23,15 +23,15 @@ JETHelper is a Dalamud plugin for Japanese learners playing FINAL FANTASY XIV. I
 
 ## Commands
 
-| Command | Purpose |
-| --- | --- |
-| `/jet` | Open or close the lookup window. Text after the command is processed immediately. |
-| `/jetlookup <text>` | Process Japanese text directly. |
-| `/jetclip` | Process the current clipboard text. |
-| `/jetconfig` | Open hotkey, dictionary, and Anki connection settings. |
-| `/jetcardconfig` | Open Anki field-mapping settings. |
-| `/jetabout` | Open acknowledgements, licences, and bundled data-source information. |
-| `/jetdebug` | Open service health, recent diagnostic events, and local log controls. |
+| Command             | Purpose                                                                           |
+| ------------------- | --------------------------------------------------------------------------------- |
+| `/jet`              | Open or close the lookup window. Text after the command is processed immediately. |
+| `/jetlookup <text>` | Process Japanese text directly.                                                   |
+| `/jetclip`          | Process the current clipboard text.                                               |
+| `/jetconfig`        | Open hotkey, dictionary, and Anki connection settings.                            |
+| `/jetcardconfig`    | Open Anki field-mapping settings.                                                 |
+| `/jetabout`         | Open acknowledgements, licences, and bundled data-source information.             |
+| `/jetdebug`         | Open service health, recent diagnostic events, and local log controls.            |
 
 ## Basic use
 
@@ -53,17 +53,25 @@ JETHelper/Assets/Dictionaries/
 
 At runtime, JETHelper first checks its installed plugin assets and then falls back to the custom dictionary folder configured through `/jetconfig`.
 
-JETHelper currently permits only the approved bundled archives `jmdict_english.zip` and `kanjidic_english.zip` to be included in release output. Other compatible dictionaries may be supplied by the user through `/jetconfig` and are never included automatically. See `JETHelper/Assets/Dictionaries/README.md`.
+Dictionary discovery and archive validation run on a background worker. Saving, clearing, or reloading the dictionary path returns immediately. During a manual reload, the previously active dictionary snapshot remains usable until a complete replacement is ready.
+
+JETHelper currently permits only the approved bundled archives `jmdict_english.zip`, `kanjidic_english.zip`, and `jiten_freq_global.zip` to be included in release output. Other compatible dictionaries may be supplied by the user through `/jetconfig` and are never included automatically. See `JETHelper/Assets/Dictionaries/README.md`.
 
 When the same dictionary title and revision are found more than once, JETHelper prefers the healthier readable copy first and then prefers a user-configured copy over an equally healthy bundled copy. Different revisions are loaded as separate sources rather than silently replacing one another.
 
 ## Dictionary data and acknowledgements
 
-JETHelper bundles Yomitan-compatible versions of **JMdict (English)** and **KANJIDIC/KANJIDIC2 (English)**, whose underlying data is maintained by the Electronic Dictionary Research and Development Group (EDRDG).
+JETHelper bundles Yomitan-compatible versions of **JMdict (English)** and **KANJIDIC/KANJIDIC2 (English)**, whose underlying data is maintained by the Electronic Dictionary Research and Development Group (EDRDG), plus **Jiten Frequency Global**, maintained by the Jiten project and distributed under CC BY-SA 4.0.
 
 See [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md) for dictionary source links, the EDRDG licence page, the Yomitan conversion project, related tools, contributors, and dictionary update information. The same information is available in game through `/jetabout`.
 
 Additional dictionaries selected by users are not distributed by JETHelper and remain subject to their respective terms.
+
+For users who want more dictionary options, `ACKNOWLEDGEMENTS.md` and
+`/jetabout` link to MarvNC's Yomitan dictionary repository and download folder.
+Only JETHelper's explicitly bundled dictionaries have been reviewed for
+JETHelper distribution and tested as its supported baseline; other downloads
+are used at the user's discretion.
 
 ## Anki setup
 
@@ -105,7 +113,7 @@ Use `/jetdebug` to view dictionary-service health, recent structured events, and
 - Deinflection currently handles only a limited set of common conjugations.
 - Vocabulary candidate detection is intentionally permissive and may show substring matches.
 - Audio, pitch-accent diagrams, and kanji stroke diagrams are not yet populated.
-- Dictionary discovery, validation, and first-use indexing are currently synchronous and can cause noticeable pauses with large dictionary collections.
+- Dictionary discovery and archive validation run in the background. First-use dictionary parsing and index construction are still synchronous and can cause a noticeable pause with large dictionary collections.
 - Direct reading of selected chat text is not implemented; the current workflow uses copied text.
 
 ## Building from source
@@ -126,7 +134,7 @@ JETHelper/bin/x64/Debug/JETHelper.dll
 
 ## Roadmap
 
-Near-term work includes background dictionary discovery/indexing with memory benchmarks, stronger deinflection, better candidate ranking, and continued workflow refinement.
+Near-term work includes background dictionary parsing/indexing with memory benchmarks, stronger deinflection, better candidate ranking, and continued workflow refinement.
 
 ## License
 

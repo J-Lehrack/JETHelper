@@ -35,6 +35,11 @@
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
             <Visible>false</Visible>
         </Content>
+        <Content Include="Assets\Dictionaries\jiten_freq_global.zip" Condition="Exists('Assets\Dictionaries\jiten_freq_global.zip')">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+            <Visible>false</Visible>
+        </Content>
 
         <Content Include="..\ACKNOWLEDGEMENTS.md">
             <Link>ACKNOWLEDGEMENTS.md</Link>
