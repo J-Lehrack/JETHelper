@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using JETHelper.Dictionaries.Models;
 using JETHelper.Lookup.Models;
 using JETHelper.Lookup.Services;
@@ -14,7 +15,9 @@ namespace JETHelper.Dictionaries.Services;
 ///
 /// The caller supplies already-inspected dictionary sources. Each archive is
 /// loaded independently so one malformed source cannot prevent the remaining
-/// dictionaries from working.
+/// dictionaries from working. Index construction is performed explicitly by
+/// the background reload worker before the containing snapshot is activated.
+/// Lookup methods never perform synchronous first-use loading.
 /// </summary>
 public sealed class YomitanTermDictionaryService
 {
@@ -42,15 +45,51 @@ public sealed class YomitanTermDictionaryService
         => sourceDictionaryNames;
     public int EntryCount => entriesByExpression.Count;
 
+    /// <summary>
+    /// Parses all compatible term banks and builds the lookup index.
+    ///
+    /// The service belongs to a not-yet-published replacement snapshot, so this
+    /// method is called exactly once by the serialized background reload worker.
+    /// Cancellation discards the entire replacement snapshot.
+    /// </summary>
+    public void Preload(CancellationToken cancellationToken)
+    {
+        if (loaded)
+            return;
+
+        foreach (var source in sources)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                LoadTermZip(source, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                loadErrors.Add(
+                    $"{serviceName}: {source.DisplayName}: {ex.Message}");
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        loaded = true;
+    }
+
     public List<DictionaryDefinition> Lookup(
         string lookupText,
         int maxResults = 8)
     {
-        EnsureLoaded();
-
-        if (string.IsNullOrWhiteSpace(lookupText)
+        if (!loaded
+            || string.IsNullOrWhiteSpace(lookupText)
             || entriesByExpression.Count == 0)
+        {
             return [];
+        }
 
         if (entriesByExpression.TryGetValue(lookupText, out var exact))
             return exact.Take(maxResults).ToList();
@@ -67,20 +106,16 @@ public sealed class YomitanTermDictionaryService
     }
 
     public bool HasExactEntry(string lookupText)
-    {
-        EnsureLoaded();
-        return !string.IsNullOrWhiteSpace(lookupText)
-               && entriesByExpression.TryGetValue(lookupText, out var found)
-               && found.Count > 0;
-    }
+        => loaded
+           && !string.IsNullOrWhiteSpace(lookupText)
+           && entriesByExpression.TryGetValue(lookupText, out var found)
+           && found.Count > 0;
 
     public List<DictionaryDefinition> LookupExact(
         string lookupText,
         int maxResults = 8)
     {
-        EnsureLoaded();
-
-        if (string.IsNullOrWhiteSpace(lookupText))
+        if (!loaded || string.IsNullOrWhiteSpace(lookupText))
             return [];
 
         return entriesByExpression.TryGetValue(lookupText, out var exact)
@@ -98,11 +133,12 @@ public sealed class YomitanTermDictionaryService
         DeinflectionService deinflector,
         int maxResults = 24)
     {
-        EnsureLoaded();
-
-        if (string.IsNullOrWhiteSpace(lookupText)
+        if (!loaded
+            || string.IsNullOrWhiteSpace(lookupText)
             || entriesByExpression.Count == 0)
+        {
             return [];
+        }
 
         var matches = new List<LookupCandidate>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -180,28 +216,9 @@ public sealed class YomitanTermDictionaryService
             .ToList();
     }
 
-    private void EnsureLoaded()
-    {
-        if (loaded)
-            return;
-
-        foreach (var source in sources)
-        {
-            try
-            {
-                LoadTermZip(source);
-            }
-            catch (Exception ex)
-            {
-                loadErrors.Add(
-                    $"{serviceName}: {source.DisplayName}: {ex.Message}");
-            }
-        }
-
-        loaded = true;
-    }
-
-    private void LoadTermZip(DictionarySource source)
+    private void LoadTermZip(
+        DictionarySource source,
+        CancellationToken cancellationToken)
     {
         using var zip = ZipFile.OpenRead(source.FilePath);
         var banks = zip.Entries
@@ -221,6 +238,8 @@ public sealed class YomitanTermDictionaryService
 
         foreach (var bank in banks)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (source.IsEntryUnreadable(bank.FullName))
             {
                 loadErrors.Add(
@@ -233,6 +252,7 @@ public sealed class YomitanTermDictionaryService
             {
                 using var stream = bank.Open();
                 using var document = JsonDocument.Parse(stream);
+                cancellationToken.ThrowIfCancellationRequested();
 
                 if (document.RootElement.ValueKind
                     != JsonValueKind.Array)
@@ -241,8 +261,12 @@ public sealed class YomitanTermDictionaryService
                         $"{bank.Name} must contain a JSON array.");
                 }
 
+                var rowIndex = 0;
                 foreach (var row in document.RootElement.EnumerateArray())
                 {
+                    if ((rowIndex++ & 1023) == 0)
+                        cancellationToken.ThrowIfCancellationRequested();
+
                     var definition = ParseTermRow(
                         row,
                         source.DisplayName);
@@ -264,6 +288,10 @@ public sealed class YomitanTermDictionaryService
                 }
 
                 loadedReadableBank = true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

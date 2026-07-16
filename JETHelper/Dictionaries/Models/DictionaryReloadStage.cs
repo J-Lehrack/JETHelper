@@ -1,14 +1,14 @@
 namespace JETHelper.Dictionaries.Models;
 
 /// <summary>
-/// Current lifecycle stage for dictionary discovery and archive inspection.
-/// Parsing/index construction remains a separate follow-up phase.
+/// Current lifecycle stage for dictionary discovery, validation, and index
+/// construction.
 /// </summary>
-public enum DictionaryReloadStage
-{
+public enum DictionaryReloadStage {
     NotStarted,
     Discovering,
     Validating,
+    Indexing,
     Ready,
     ReadyWithWarnings,
     Failed,

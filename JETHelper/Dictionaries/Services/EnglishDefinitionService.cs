@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using JETHelper.Dictionaries.Catalog;
 using JETHelper.Dictionaries.Models;
 using JETHelper.Lookup.Models;
@@ -37,9 +38,13 @@ public sealed class EnglishDefinitionService
     }
 
     public bool IsLoaded => termService.IsLoaded;
+
+    public void Preload(CancellationToken cancellationToken)
+        => termService.Preload(cancellationToken);
     public string? LoadError => termService.LoadError;
     public IReadOnlyList<string> SourceDictionaryNames
         => termService.SourceDictionaryNames;
+    public int EntryCount => termService.EntryCount;
 
     public List<DictionaryDefinition> Lookup(
         string lookupText,

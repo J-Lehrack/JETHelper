@@ -2,7 +2,7 @@
 
 JETHelper is a Dalamud plugin for Japanese learners playing FINAL FANTASY XIV. It turns copied or manually entered Japanese text into vocabulary and kanji lookup results, then sends selected entries to configurable Anki decks through AnkiConnect.
 
-> **Project status:** Functional alpha. The core lookup-to-Anki workflow, bundled dictionaries, diagnostics, optional Anki note types, non-blocking AnkiConnect operations, and background dictionary discovery/validation are implemented. Background dictionary parsing/indexing, deinflection, candidate ranking, and media fields still need refinement before a general release.
+> **Project status:** Functional alpha. The core lookup-to-Anki workflow, bundled dictionaries, diagnostics, optional Anki note types, non-blocking AnkiConnect operations, and background dictionary discovery, validation, parsing, and indexing are implemented. Memory benchmarking, deinflection, candidate ranking, and media fields still need refinement before a general release.
 
 ## Current features
 
@@ -53,7 +53,7 @@ JETHelper/Assets/Dictionaries/
 
 At runtime, JETHelper first checks its installed plugin assets and then falls back to the custom dictionary folder configured through `/jetconfig`.
 
-Dictionary discovery and archive validation run on a background worker. Saving, clearing, or reloading the dictionary path returns immediately. During a manual reload, the previously active dictionary snapshot remains usable until a complete replacement is ready.
+Dictionary discovery, archive validation, parsing, and lookup-index construction run on one serialized background worker. Saving, clearing, or reloading the dictionary path returns immediately. During a manual reload, the previously active fully indexed snapshot remains usable until the complete replacement is ready. New snapshots are activated only after all supported vocabulary, kanji, and frequency indexes finish building.
 
 JETHelper currently permits only the approved bundled archives `jmdict_english.zip`, `kanjidic_english.zip`, and `jiten_freq_global.zip` to be included in release output. Other compatible dictionaries may be supplied by the user through `/jetconfig` and are never included automatically. See `JETHelper/Assets/Dictionaries/README.md`.
 
@@ -113,7 +113,7 @@ Use `/jetdebug` to view dictionary-service health, recent structured events, and
 - Deinflection currently handles only a limited set of common conjugations.
 - Vocabulary candidate detection is intentionally permissive and may show substring matches.
 - Audio, pitch-accent diagrams, and kanji stroke diagrams are not yet populated.
-- Dictionary discovery and archive validation run in the background. First-use dictionary parsing and index construction are still synchronous and can cause a noticeable pause with large dictionary collections.
+- Dictionary loading is non-blocking, but very large collections can still require significant background CPU, memory, and total loading time. Formal memory/performance benchmarks and any resulting dictionary controls are planned for Phase 6B.2D.
 - Direct reading of selected chat text is not implemented; the current workflow uses copied text.
 
 ## Building from source
@@ -134,7 +134,7 @@ JETHelper/bin/x64/Debug/JETHelper.dll
 
 ## Roadmap
 
-Near-term work includes background dictionary parsing/indexing with memory benchmarks, stronger deinflection, better candidate ranking, and continued workflow refinement.
+Near-term work includes dictionary memory/performance benchmarking, stronger deinflection, better candidate ranking, and continued workflow refinement.
 
 ## License
 

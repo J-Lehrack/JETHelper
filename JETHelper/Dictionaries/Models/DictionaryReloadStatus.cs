@@ -2,7 +2,8 @@ namespace JETHelper.Dictionaries.Models;
 
 /// <summary>
 /// Immutable status snapshot exposed to the settings UI while dictionary
-/// discovery and archive inspection run in the background.
+/// discovery, archive validation, parsing, and index construction run in the
+/// background.
 /// </summary>
 public sealed record DictionaryReloadStatus
 {
@@ -17,13 +18,15 @@ public sealed record DictionaryReloadStatus
 
     public bool IsActive
         => Stage is DictionaryReloadStage.Discovering
-            or DictionaryReloadStage.Validating;
+            or DictionaryReloadStage.Validating
+            or DictionaryReloadStage.Indexing;
 
     public string StageLabel => Stage switch
     {
         DictionaryReloadStage.NotStarted => "Not started",
         DictionaryReloadStage.Discovering => "Discovering",
         DictionaryReloadStage.Validating => "Validating",
+        DictionaryReloadStage.Indexing => "Indexing",
         DictionaryReloadStage.Ready => "Ready",
         DictionaryReloadStage.ReadyWithWarnings => "Ready with warnings",
         DictionaryReloadStage.Failed => "Failed",

@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using JETHelper.Anki.Models;
 using JETHelper.Dictionaries.Catalog;
 using JETHelper.Dictionaries.Models;
@@ -13,6 +14,8 @@ namespace JETHelper.Dictionaries.Services;
 /// <summary>
 /// Loads every inspected Yomitan kanji dictionary and merges compatible data by
 /// character. It is no longer tied to a specific kanjidic_english.zip filename.
+/// Index construction is completed by the background reload worker before the
+/// containing snapshot becomes active.
 /// </summary>
 public sealed class KanjiDefinitionService
 {
@@ -34,12 +37,41 @@ public sealed class KanjiDefinitionService
         : string.Join("; ", loadErrors);
     public IReadOnlyList<string> SourceDictionaryNames
         => sourceDictionaryNames;
+    public int EntryCount => entries.Count;
+
+    public void Preload(CancellationToken cancellationToken)
+    {
+        if (loaded)
+            return;
+
+        foreach (var source in sources)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                LoadKanjiZip(source, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                loadErrors.Add($"{source.DisplayName}: {ex.Message}");
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        loaded = true;
+    }
 
     public KanjiCardData? LookupFirstKanji(
         string lookupText,
         string sentence)
     {
-        EnsureLoaded();
+        if (!loaded)
+            return null;
 
         foreach (var kanji in GetUniqueKanji(lookupText))
         {
@@ -64,27 +96,9 @@ public sealed class KanjiDefinitionService
         return null;
     }
 
-    private void EnsureLoaded()
-    {
-        if (loaded)
-            return;
-
-        foreach (var source in sources)
-        {
-            try
-            {
-                LoadKanjiZip(source);
-            }
-            catch (Exception ex)
-            {
-                loadErrors.Add($"{source.DisplayName}: {ex.Message}");
-            }
-        }
-
-        loaded = true;
-    }
-
-    private void LoadKanjiZip(DictionarySource source)
+    private void LoadKanjiZip(
+        DictionarySource source,
+        CancellationToken cancellationToken)
     {
         using var zip = ZipFile.OpenRead(source.FilePath);
         var banks = zip.Entries
@@ -104,6 +118,8 @@ public sealed class KanjiDefinitionService
 
         foreach (var bank in banks)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (source.IsEntryUnreadable(bank.FullName))
             {
                 loadErrors.Add(
@@ -116,6 +132,7 @@ public sealed class KanjiDefinitionService
             {
                 using var stream = bank.Open();
                 using var document = JsonDocument.Parse(stream);
+                cancellationToken.ThrowIfCancellationRequested();
 
                 if (document.RootElement.ValueKind
                     != JsonValueKind.Array)
@@ -124,8 +141,12 @@ public sealed class KanjiDefinitionService
                         $"{bank.Name} must contain a JSON array.");
                 }
 
+                var rowIndex = 0;
                 foreach (var row in document.RootElement.EnumerateArray())
                 {
+                    if ((rowIndex++ & 1023) == 0)
+                        cancellationToken.ThrowIfCancellationRequested();
+
                     var entry = ParseKanjiRow(
                         row,
                         source.DisplayName);
@@ -141,6 +162,10 @@ public sealed class KanjiDefinitionService
                 }
 
                 loadedReadableBank = true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

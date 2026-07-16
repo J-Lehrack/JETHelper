@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using JETHelper.Dictionaries.Catalog;
 using JETHelper.Dictionaries.Models;
 
@@ -11,7 +12,8 @@ namespace JETHelper.Dictionaries.Services;
 /// <summary>
 /// Loads every inspected Yomitan term-frequency dictionary.
 /// Each archive is isolated so a broken frequency list does not disable valid
-/// definition or kanji dictionaries.
+/// definition or kanji dictionaries. The index is built by the background
+/// reload worker before its snapshot is activated.
 /// </summary>
 public sealed class FrequencyService
 {
@@ -27,18 +29,49 @@ public sealed class FrequencyService
         sources = catalog.Select(DictionaryDataKind.TermFrequency);
     }
 
+    public bool IsLoaded => loaded;
     public string? LoadError => loadErrors.Count == 0
         ? null
         : string.Join("; ", loadErrors);
     public IReadOnlyList<string> SourceDictionaryNames
         => sourceDictionaryNames;
+    public int EntryCount => entries.Count;
+
+    public void Preload(CancellationToken cancellationToken)
+    {
+        if (loaded)
+            return;
+
+        foreach (var source in sources)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                LoadFrequencyZip(source, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                loadErrors.Add($"{source.DisplayName}: {ex.Message}");
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        loaded = true;
+    }
 
     public FrequencyInfo Lookup(string lookupText)
     {
-        EnsureLoaded();
-
-        if (string.IsNullOrWhiteSpace(lookupText) || entries.Count == 0)
+        if (!loaded
+            || string.IsNullOrWhiteSpace(lookupText)
+            || entries.Count == 0)
+        {
             return new FrequencyInfo();
+        }
 
         if (entries.TryGetValue(lookupText, out var exact))
             return exact;
@@ -54,27 +87,9 @@ public sealed class FrequencyService
         return new FrequencyInfo();
     }
 
-    private void EnsureLoaded()
-    {
-        if (loaded)
-            return;
-
-        foreach (var source in sources)
-        {
-            try
-            {
-                LoadFrequencyZip(source);
-            }
-            catch (Exception ex)
-            {
-                loadErrors.Add($"{source.DisplayName}: {ex.Message}");
-            }
-        }
-
-        loaded = true;
-    }
-
-    private void LoadFrequencyZip(DictionarySource source)
+    private void LoadFrequencyZip(
+        DictionarySource source,
+        CancellationToken cancellationToken)
     {
         using var zip = ZipFile.OpenRead(source.FilePath);
         var metaBanks = zip.Entries
@@ -94,6 +109,8 @@ public sealed class FrequencyService
 
         foreach (var bank in metaBanks)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (source.IsEntryUnreadable(bank.FullName))
             {
                 loadErrors.Add(
@@ -106,6 +123,7 @@ public sealed class FrequencyService
             {
                 using var stream = bank.Open();
                 using var document = JsonDocument.Parse(stream);
+                cancellationToken.ThrowIfCancellationRequested();
 
                 if (document.RootElement.ValueKind
                     != JsonValueKind.Array)
@@ -114,10 +132,20 @@ public sealed class FrequencyService
                         $"{bank.Name} must contain a JSON array.");
                 }
 
+                var rowIndex = 0;
                 foreach (var row in document.RootElement.EnumerateArray())
+                {
+                    if ((rowIndex++ & 1023) == 0)
+                        cancellationToken.ThrowIfCancellationRequested();
+
                     TryAddFrequencyRow(row, source.DisplayName);
+                }
 
                 loadedReadableBank = true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

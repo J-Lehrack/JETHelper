@@ -101,7 +101,12 @@ public sealed class LookupService : System.IDisposable
         if (!string.IsNullOrWhiteSpace(dictionaryStatus))
         {
             var reloadStatus = dictionaryManager.ReloadStatus;
-            status = reloadStatus.IsActive && !reloadStatus.HasActiveSnapshot
+            var dictionaryStatusReplacesLookup
+                      = reloadStatus.IsActive && !reloadStatus.HasActiveSnapshot
+                        || containsJapanese
+                           && !dictionaryManager.HasUsableLookupDictionaries;
+
+            status = dictionaryStatusReplacesLookup
                            ? dictionaryStatus
                            : status + " " + dictionaryStatus;
         }

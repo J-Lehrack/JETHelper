@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading;
 using JETHelper.Dictionaries.Catalog;
 using JETHelper.Dictionaries.Models;
 using JETHelper.Lookup.Models;
@@ -10,7 +11,8 @@ namespace JETHelper.Dictionaries.Services;
 /// Loads general Japanese-language Yomitan term dictionaries.
 /// Selection is based on inspected definition language rather than filenames.
 /// </summary>
-public sealed class JapaneseDefinitionService {
+public sealed class JapaneseDefinitionService
+{
     private readonly YomitanTermDictionaryService termService;
 
     public JapaneseDefinitionService(DictionaryCatalog catalog)
@@ -24,6 +26,9 @@ public sealed class JapaneseDefinitionService {
     }
 
     public string? LoadError => termService.LoadError;
+
+    public void Preload(CancellationToken cancellationToken)
+        => termService.Preload(cancellationToken);
     public bool IsLoaded => termService.IsLoaded;
     public int EntryCount => termService.EntryCount;
     public IReadOnlyList<string>

@@ -19,13 +19,9 @@ namespace JETHelper.Dictionaries.Services;
 /// <summary>
 /// Coordinates dictionary discovery and the individual data loaders.
 ///
-/// Discovery and archive inspection run on a background worker. The currently
-/// active dictionary snapshot remains available until a complete replacement
-/// snapshot is ready, so manual reloads do not interrupt normal lookup use.
-///
-/// Parsing and index construction inside the individual dictionary services are
-/// still lazy in this phase and will move to background preloading in Phase
-/// 6B.2C.
+/// Discovery, archive inspection, parsing, and index construction all run on a
+/// serialized background worker. The currently active dictionary snapshot stays
+/// available until a complete replacement has finished building every index.
 /// </summary>
 public sealed class DictionaryManager : IDisposable
 {
@@ -59,8 +55,8 @@ public sealed class DictionaryManager : IDisposable
     /// Requests a background dictionary reload and returns immediately.
     ///
     /// A newer request cancels an older request. The semaphore ensures only one
-    /// discovery/inspection worker performs expensive archive work at a time,
-    /// even if cancellation cannot interrupt the middle of one ZIP entry read.
+    /// discovery/validation/indexing worker performs expensive archive work at a
+    /// time, even if cancellation cannot interrupt JsonDocument.Parse itself.
     /// </summary>
     public void ReloadDictionaries()
     {
@@ -100,8 +96,8 @@ public sealed class DictionaryManager : IDisposable
                             + $"existing snapshot={hasActiveSnapshot}.");
 
         // Task.Run is intentional here. ZIP discovery, decompression, checksum
-        // validation, and JSON parsing are blocking/CPU work rather than
-        // naturally asynchronous I/O.
+        // validation, JSON parsing, and index construction are blocking/CPU work
+        // rather than naturally asynchronous I/O.
         _ = Task.Run(() => ReloadWorker(
                            generation,
                            configuredPath,
@@ -128,6 +124,14 @@ public sealed class DictionaryManager : IDisposable
 
     public IReadOnlyList<string> LoaderErrors
         => GetSnapshot() is { } snapshot ? GetLoadErrors(snapshot) : [];
+
+    /// <summary>
+    /// Indicates whether the active snapshot contains at least one supported
+    /// vocabulary-definition or kanji-definition source. Frequency-only
+    /// collections do not satisfy normal lookup requirements.
+    /// </summary>
+    public bool HasUsableLookupDictionaries
+        => GetSnapshot()?.HasUsableLookupData ?? false;
 
     public VocabularyCardData? BuildVocabularyCard(string lookupText,
                                                    string sentence)
@@ -290,26 +294,8 @@ public sealed class DictionaryManager : IDisposable
 
         var catalog = snapshot.Catalog;
         var messages = new List<string>();
-        var usableDefinitionSources
-                  = catalog.Select(DictionaryDataKind.TermDefinitions,
-                                   DictionaryLanguageKind.English,
-                                   DictionaryContentRole.General)
-                              .Count
-                    + catalog.Select(DictionaryDataKind.TermDefinitions,
-                                     DictionaryLanguageKind.Mixed,
-                                     DictionaryContentRole.General)
-                                .Count
-                    + catalog.Select(DictionaryDataKind.TermDefinitions,
-                                     DictionaryLanguageKind.Japanese,
-                                     DictionaryContentRole.General)
-                                .Count
-                    + catalog.Select(DictionaryDataKind.TermDefinitions,
-                                     language: null,
-                                     role: DictionaryContentRole.SlangOrMedia)
-                                .Count
-                    + catalog.Select(DictionaryDataKind.KanjiDefinitions).Count;
 
-        if (usableDefinitionSources == 0)
+        if (!snapshot.HasUsableLookupData)
         {
             messages.Add("No supported definition or kanji dictionaries were "
                          + "found. Add Yomitan dictionaries to "
@@ -447,10 +433,42 @@ public sealed class DictionaryManager : IDisposable
             var replacement = new DictionaryRuntimeSnapshot(catalog);
             token.ThrowIfCancellationRequested();
 
+            UpdateReloadStatus(
+                      generation,
+                      new DictionaryReloadStatus
+                      {
+                          Stage = DictionaryReloadStage.Indexing,
+                          TotalSources = replacement.IndexingStepCount,
+                          Message = "Building dictionary lookup indexes in the "
+                                    + "background.",
+                          HasActiveSnapshot = GetSnapshot() is not null
+                      });
+
+            replacement.Preload(
+                      token,
+                      (processed, total, current) => UpdateReloadStatus(
+                                generation,
+                                new DictionaryReloadStatus
+                                {
+                                    Stage = DictionaryReloadStage.Indexing,
+                                    ProcessedSources = processed,
+                                    TotalSources = total,
+                                    CurrentSource = current,
+                                    Message = processed >= total
+                                                  ? "Dictionary lookup indexes "
+                                                    + "are ready for activation."
+                                                  : $"Building index {processed + 1} "
+                                                    + $"of {total}.",
+                                    HasActiveSnapshot = GetSnapshot() is not null
+                                }));
+
+            token.ThrowIfCancellationRequested();
+            var loadErrors = GetLoadErrors(replacement);
             var hasWarnings = catalog.WarningSources.Count > 0
                               || catalog.ProblemSources.Count > 0
                               || catalog.DuplicateDecisions.Count > 0
-                              || catalog.RevisionGroups.Count > 0;
+                              || catalog.RevisionGroups.Count > 0
+                              || loadErrors.Count > 0;
 
             lock (stateLock)
             {
@@ -464,15 +482,16 @@ public sealed class DictionaryManager : IDisposable
                     Stage = hasWarnings
                                   ? DictionaryReloadStage.ReadyWithWarnings
                                   : DictionaryReloadStage.Ready,
-                    ProcessedSources = candidates.Count,
-                    TotalSources = candidates.Count,
-                    Message = BuildReadyMessage(catalog),
+                    ProcessedSources = replacement.IndexingStepCount,
+                    TotalSources = replacement.IndexingStepCount,
+                    Message = BuildReadyMessage(catalog, loadErrors.Count),
                     HasActiveSnapshot = true
                 };
             }
 
             stopwatch.Stop();
             LogCatalog(replacement.Catalog, stopwatch.Elapsed);
+            LogLoaderErrors(replacement);
         }
         catch (OperationCanceledException)
         {
@@ -553,7 +572,8 @@ public sealed class DictionaryManager : IDisposable
     {
         diagnostics.Information(
                   "Dictionaries",
-                  $"Catalog ready in {elapsed.TotalMilliseconds:F1} ms: "
+                  $"Dictionary snapshot ready in {elapsed.TotalMilliseconds:F1} ms "
+                            + "after validation and index construction: "
                             + $"{catalog.ReadySources.Count} usable "
                             + $"({catalog.WarningSources.Count} with warnings), "
                             + $"{catalog.ProblemSources.Count} "
@@ -653,11 +673,19 @@ public sealed class DictionaryManager : IDisposable
               .ToList();
     }
 
-    private static string BuildReadyMessage(DictionaryCatalog catalog)
+    private static string BuildReadyMessage(
+              DictionaryCatalog catalog,
+              int loaderErrorCount)
     {
-        return $"Dictionary catalog ready: {catalog.ReadySources.Count} usable, "
-               + $"{catalog.WarningSources.Count} with warnings, "
-               + $"{catalog.ProblemSources.Count} skipped/unsupported.";
+        var message
+                  = $"Dictionary snapshot ready: {catalog.ReadySources.Count} usable, "
+                    + $"{catalog.WarningSources.Count} with warnings, "
+                    + $"{catalog.ProblemSources.Count} skipped/unsupported.";
+
+        return loaderErrorCount == 0
+                     ? message
+                     : message + $" {loaderErrorCount} loader error(s) were "
+                       + "isolated; open /jetdebug for details.";
     }
 
     private static void AddSourceTags(
@@ -693,6 +721,8 @@ public sealed class DictionaryManager : IDisposable
 
     private sealed class DictionaryRuntimeSnapshot
     {
+        private const int TotalIndexingSteps = 5;
+
         public DictionaryRuntimeSnapshot(DictionaryCatalog catalog)
         {
             Catalog = catalog;
@@ -709,5 +739,39 @@ public sealed class DictionaryManager : IDisposable
         public JapaneseDefinitionService JapaneseDefinitions { get; }
         public SlangDefinitionService SlangDefinitions { get; }
         public FrequencyService Frequency { get; }
+        public int IndexingStepCount => TotalIndexingSteps;
+        public bool HasUsableLookupData
+            => EnglishDefinitions.EntryCount > 0
+               || JapaneseDefinitions.EntryCount > 0
+               || SlangDefinitions.EntryCount > 0
+               || KanjiDefinitions.EntryCount > 0;
+
+        /// <summary>
+        /// Builds indexes sequentially to avoid multiplying peak memory, CPU,
+        /// decompression, and JSON allocation pressure across large archives.
+        /// </summary>
+        public void Preload(
+                  CancellationToken cancellationToken,
+                  Action<int, int, string> reportProgress)
+        {
+            var steps = new (string Label, Action<CancellationToken> Load)[]
+            {
+                ("English definitions", EnglishDefinitions.Preload),
+                ("Japanese definitions", JapaneseDefinitions.Preload),
+                ("Slang/media definitions", SlangDefinitions.Preload),
+                ("Kanji definitions", KanjiDefinitions.Preload),
+                ("Term frequency", Frequency.Preload)
+            };
+
+            for (var index = 0; index < steps.Length; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var step = steps[index];
+                reportProgress(index, steps.Length, step.Label);
+                step.Load(cancellationToken);
+            }
+
+            reportProgress(steps.Length, steps.Length, string.Empty);
+        }
     }
 }

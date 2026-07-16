@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading;
 using JETHelper.Dictionaries.Catalog;
 using JETHelper.Dictionaries.Models;
 using JETHelper.Lookup.Models;
@@ -29,8 +30,14 @@ public sealed class SlangDefinitionService
     }
 
     public string? LoadError => termService.LoadError;
+
+    public bool IsLoaded => termService.IsLoaded;
+
+    public void Preload(CancellationToken cancellationToken)
+        => termService.Preload(cancellationToken);
     public IReadOnlyList<string> SourceDictionaryNames
         => termService.SourceDictionaryNames;
+    public int EntryCount => termService.EntryCount;
 
     public List<DictionaryDefinition> Lookup(
         string lookupText,
