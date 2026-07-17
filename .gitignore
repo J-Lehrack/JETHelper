@@ -22,5 +22,8 @@ JETHelper/Assets/Dictionaries/*.zip
 
 # Dev tools to assist in debugging and testing.
 DevTools/DictionaryTestGenerator/generated/
+DevTools/DictionaryBenchmark/benchmark_profiles.example.json
+DevTools/DictionaryBenchmark/output/*
+!DevTools/DictionaryBenchmark/output/.gitkeep
 __pycache__/
 *.pyc
