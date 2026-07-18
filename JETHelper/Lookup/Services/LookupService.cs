@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using JETHelper.Anki.Models;
+using JETHelper.Benchmarking.Services;
 using JETHelper.Diagnostics.Services;
 using JETHelper.Dictionaries.Models;
 using JETHelper.Dictionaries.Services;
@@ -21,15 +22,23 @@ public sealed class LookupService : System.IDisposable
     private readonly DiagnosticService diagnostics;
     private readonly DictionaryManager dictionaryManager;
 
-    public LookupService(Configuration configuration,
-                         DiagnosticService diagnostics)
+    public LookupService(
+        Configuration configuration,
+        DiagnosticService diagnostics,
+        DictionaryBenchmarkService benchmark)
     {
         this.configuration = configuration;
         this.diagnostics = diagnostics;
-        dictionaryManager = new DictionaryManager(configuration, diagnostics);
+        dictionaryManager = new DictionaryManager(
+            configuration,
+            diagnostics,
+            benchmark);
     }
 
     public void ReloadDictionaries() => dictionaryManager.ReloadDictionaries();
+
+    public bool CancelDictionaryReload(out string message)
+        => dictionaryManager.CancelActiveReload(out message);
 
     public DictionaryReloadStatus
               DictionaryReloadStatus => dictionaryManager.ReloadStatus;

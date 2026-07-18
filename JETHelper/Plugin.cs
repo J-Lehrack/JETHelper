@@ -4,6 +4,8 @@ using Dalamud.Plugin;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using JETHelper.Windows;
+using JETHelper.Benchmarking.Services;
+using JETHelper.Benchmarking.Windows;
 using JETHelper.Anki.Services;
 using JETHelper.Diagnostics.Windows;
 using JETHelper.Diagnostics.Services;
@@ -80,6 +82,7 @@ public sealed class Plugin : IDalamudPlugin
     private const string CardConfigCommandName = "/jetcardconfig";
     private const string AcknowledgementsCommandName = "/jetabout";
     private const string DiagnosticsCommandName = "/jetdebug";
+    private const string BenchmarkCommandName = "/jetbenchmark";
 
     public Configuration Configuration { get; init; }
 
@@ -87,6 +90,10 @@ public sealed class Plugin : IDalamudPlugin
     // Keeping them separate prevents Plugin.cs from becoming a giant catch-all
     // file.
     public DiagnosticService DiagnosticService { get; private set; }
+    public DictionaryBenchmarkService DictionaryBenchmarkService
+    {
+        get; private set;
+    }
     public LookupService LookupService { get; private set; }
     public ClipboardService ClipboardService { get; } = new();
     public HotkeyService HotkeyService { get; private set; } = null!;
@@ -100,6 +107,7 @@ public sealed class Plugin : IDalamudPlugin
     private CardConfigWindow CardConfigWindow { get; init; }
     private AcknowledgementsWindow AcknowledgementsWindow { get; init; }
     private DiagnosticsWindow DiagnosticsWindow { get; init; }
+    private DictionaryBenchmarkWindow DictionaryBenchmarkWindow { get; init; }
     private MainWindow MainWindow { get; init; }
 
     public Plugin()
@@ -115,11 +123,40 @@ public sealed class Plugin : IDalamudPlugin
         DiagnosticService = new DiagnosticService(Configuration,
                                                   PluginInterface,
                                                   Log);
+        DictionaryBenchmarkService = new DictionaryBenchmarkService(
+            PluginInterface,
+            DiagnosticService);
+
+        // A benchmark armed through /jetbenchmark is one-shot. It must be
+        // started before LookupService constructs DictionaryManager because the
+        // manager immediately requests the startup dictionary reload.
+        if (Configuration.DictionaryBenchmarkNextStartup)
+        {
+            var profile = Configuration.DictionaryBenchmarkProfileLabel;
+            var collectGarbage
+                = Configuration.DictionaryBenchmarkCollectGarbageBeforeStart;
+
+            Configuration.DictionaryBenchmarkNextStartup = false;
+            Configuration.Save();
+
+            DictionaryBenchmarkService.StartRun(
+                profile,
+                "plugin-startup",
+                collectGarbage,
+                out var benchmarkMessage);
+            DiagnosticService.Information(
+                "Benchmark",
+                "Next-startup dictionary benchmark was consumed. "
+                + benchmarkMessage);
+        }
 
         // Create the lookup pipeline after configuration is loaded so services
         // can read settings such as the manually configured dictionary folder
         // path.
-        LookupService = new LookupService(Configuration, DiagnosticService);
+        LookupService = new LookupService(
+            Configuration,
+            DiagnosticService,
+            DictionaryBenchmarkService);
         AnkiService = new AnkiService(DiagnosticService);
 
         // When the configured key combination is pressed, it calls
@@ -133,12 +170,14 @@ public sealed class Plugin : IDalamudPlugin
         CardConfigWindow = new CardConfigWindow(ConfigWindow);
         AcknowledgementsWindow = new AcknowledgementsWindow();
         DiagnosticsWindow = new DiagnosticsWindow(this);
+        DictionaryBenchmarkWindow = new DictionaryBenchmarkWindow(this);
         MainWindow = new MainWindow(this);
 
         WindowSystem.AddWindow(ConfigWindow);
         WindowSystem.AddWindow(CardConfigWindow);
         WindowSystem.AddWindow(AcknowledgementsWindow);
         WindowSystem.AddWindow(DiagnosticsWindow);
+        WindowSystem.AddWindow(DictionaryBenchmarkWindow);
         WindowSystem.AddWindow(MainWindow);
 
         // Register slash commands with Dalamud.
@@ -199,6 +238,14 @@ public sealed class Plugin : IDalamudPlugin
                         + "and local log controls."
                   });
 
+        CommandManager.AddHandler(
+                  BenchmarkCommandName,
+                  new CommandInfo(OnBenchmarkCommand)
+                  {
+                      HelpMessage
+                      = "Open development-only dictionary benchmark controls."
+                  });
+
         // Tell Dalamud what to call when UI is drawn or when the user opens
         // plugin UI/config.
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
@@ -228,9 +275,11 @@ public sealed class Plugin : IDalamudPlugin
         CardConfigWindow.Dispose();
         AcknowledgementsWindow.Dispose();
         DiagnosticsWindow.Dispose();
+        DictionaryBenchmarkWindow.Dispose();
         MainWindow.Dispose();
         AnkiService.Dispose();
         LookupService.Dispose();
+        DictionaryBenchmarkService.Dispose();
         DiagnosticService.Dispose();
 
         CommandManager.RemoveHandler(MainCommandName);
@@ -240,6 +289,7 @@ public sealed class Plugin : IDalamudPlugin
         CommandManager.RemoveHandler(CardConfigCommandName);
         CommandManager.RemoveHandler(AcknowledgementsCommandName);
         CommandManager.RemoveHandler(DiagnosticsCommandName);
+        CommandManager.RemoveHandler(BenchmarkCommandName);
     }
 
     private void OnFrameworkUpdate(IFramework framework)
@@ -290,6 +340,11 @@ public sealed class Plugin : IDalamudPlugin
         OpenDiagnosticsUi();
     }
 
+    private void OnBenchmarkCommand(string command, string args)
+    {
+        OpenDictionaryBenchmarkUi();
+    }
+
     /// <summary>
     /// Processes any raw string as lookup text, updates the main window, and
     /// opens it. This is the central path used by commands, buttons, and later
@@ -322,5 +377,7 @@ public sealed class Plugin : IDalamudPlugin
     public void
     OpenAcknowledgementsUi() => AcknowledgementsWindow.IsOpen = true;
     public void OpenDiagnosticsUi() => DiagnosticsWindow.IsOpen = true;
+    public void OpenDictionaryBenchmarkUi()
+        => DictionaryBenchmarkWindow.IsOpen = true;
     public void ToggleMainUi() => MainWindow.Toggle();
 }

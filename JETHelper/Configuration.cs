@@ -35,6 +35,17 @@ public class Configuration : IPluginConfiguration
     public bool DiagnosticIncludeLookupText { get; set; } = false;
 
     /// <summary>
+    /// Development-only one-shot dictionary benchmark settings. The normal
+    /// plugin does not sample memory or write benchmark output unless the user
+    /// explicitly starts a run or arms the next startup through /jetbenchmark.
+    /// </summary>
+    public bool DictionaryBenchmarkNextStartup { get; set; } = false;
+    public string DictionaryBenchmarkProfileLabel { get; set; }
+        = "curated-bundled-baseline";
+    public bool DictionaryBenchmarkCollectGarbageBeforeStart { get; set; }
+        = true;
+
+    /// <summary>
     /// Exact Anki deck and note type names selected from AnkiConnect.
     /// They intentionally start empty because other users will not have the
     /// developer's personal decks or note types.

@@ -15,14 +15,18 @@ public sealed class JapaneseDefinitionService
 {
     private readonly YomitanTermDictionaryService termService;
 
-    public JapaneseDefinitionService(DictionaryCatalog catalog)
+    public JapaneseDefinitionService(
+        DictionaryCatalog catalog,
+        bool collectMetrics)
     {
         var sources = catalog.Select(DictionaryDataKind.TermDefinitions,
                                      DictionaryLanguageKind.Japanese,
                                      DictionaryContentRole.General);
 
-        termService = new YomitanTermDictionaryService("Japanese definitions",
-                                                       sources);
+        termService = new YomitanTermDictionaryService(
+            "Japanese definitions",
+            sources,
+            collectMetrics);
     }
 
     public string? LoadError => termService.LoadError;
@@ -31,6 +35,10 @@ public sealed class JapaneseDefinitionService
         => termService.Preload(cancellationToken);
     public bool IsLoaded => termService.IsLoaded;
     public int EntryCount => termService.EntryCount;
+    public int StoredResultObjectCount
+        => termService.StoredResultObjectCount;
+    public IReadOnlyList<DictionaryLoadMetrics> LoadMetrics
+        => termService.LoadMetrics;
     public IReadOnlyList<string>
               SourceDictionaryNames => termService.SourceDictionaryNames;
 

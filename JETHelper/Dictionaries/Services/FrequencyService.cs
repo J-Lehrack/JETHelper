@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
@@ -18,14 +19,19 @@ namespace JETHelper.Dictionaries.Services;
 public sealed class FrequencyService
 {
     private readonly IReadOnlyList<DictionarySource> sources;
+    private readonly bool collectMetrics;
     private readonly Dictionary<string, FrequencyInfo> entries
         = new(StringComparer.Ordinal);
     private readonly List<string> sourceDictionaryNames = [];
     private readonly List<string> loadErrors = [];
+    private readonly List<DictionaryLoadMetrics> loadMetrics = [];
     private bool loaded;
 
-    public FrequencyService(DictionaryCatalog catalog)
+    public FrequencyService(
+        DictionaryCatalog catalog,
+        bool collectMetrics)
     {
+        this.collectMetrics = collectMetrics;
         sources = catalog.Select(DictionaryDataKind.TermFrequency);
     }
 
@@ -36,6 +42,8 @@ public sealed class FrequencyService
     public IReadOnlyList<string> SourceDictionaryNames
         => sourceDictionaryNames;
     public int EntryCount => entries.Count;
+    public int StoredResultObjectCount => entries.Count;
+    public IReadOnlyList<DictionaryLoadMetrics> LoadMetrics => loadMetrics;
 
     public void Preload(CancellationToken cancellationToken)
     {
@@ -46,9 +54,23 @@ public sealed class FrequencyService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            var stopwatch = collectMetrics ? Stopwatch.StartNew() : null;
+            var keysBefore = entries.Count;
+            var errorsBefore = loadErrors.Count;
+            var banksDiscovered = 0;
+            var banksProcessed = 0;
+            var banksSkipped = 0;
+            long rowsProcessed = 0;
+
             try
             {
-                LoadFrequencyZip(source, cancellationToken);
+                LoadFrequencyZip(
+                    source,
+                    cancellationToken,
+                    ref banksDiscovered,
+                    ref banksProcessed,
+                    ref banksSkipped,
+                    ref rowsProcessed);
             }
             catch (OperationCanceledException)
             {
@@ -57,6 +79,29 @@ public sealed class FrequencyService
             catch (Exception ex)
             {
                 loadErrors.Add($"{source.DisplayName}: {ex.Message}");
+            }
+            finally
+            {
+                if (collectMetrics)
+                {
+                    stopwatch!.Stop();
+                    var keysAdded = entries.Count - keysBefore;
+                    loadMetrics.Add(new DictionaryLoadMetrics
+                    {
+                        ServiceName = "Term frequency",
+                        SourceName = source.DisplayName,
+                        SourcePath = source.FilePath,
+                        BanksDiscovered = banksDiscovered,
+                        BanksProcessed = banksProcessed,
+                        BanksSkipped = banksSkipped,
+                        RowsProcessed = rowsProcessed,
+                        LookupKeysAdded = keysAdded,
+                        StoredResultObjectsAdded = keysAdded,
+                        ErrorCount = loadErrors.Count - errorsBefore,
+                        DurationMilliseconds
+                            = stopwatch.Elapsed.TotalMilliseconds
+                    });
+                }
             }
         }
 
@@ -89,7 +134,11 @@ public sealed class FrequencyService
 
     private void LoadFrequencyZip(
         DictionarySource source,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ref int banksDiscovered,
+        ref int banksProcessed,
+        ref int banksSkipped,
+        ref long rowsProcessed)
     {
         using var zip = ZipFile.OpenRead(source.FilePath);
         var metaBanks = zip.Entries
@@ -101,6 +150,9 @@ public sealed class FrequencyService
                     ".json",
                     StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+        if (collectMetrics)
+            banksDiscovered = metaBanks.Count;
 
         if (metaBanks.Count == 0)
             return;
@@ -116,11 +168,15 @@ public sealed class FrequencyService
                 loadErrors.Add(
                     $"{source.DisplayName}/{bank.Name} failed archive "
                     + "validation and was skipped.");
+                if (collectMetrics)
+                    banksSkipped++;
                 continue;
             }
 
             try
             {
+                if (collectMetrics)
+                    banksProcessed++;
                 using var stream = bank.Open();
                 using var document = JsonDocument.Parse(stream);
                 cancellationToken.ThrowIfCancellationRequested();
@@ -135,6 +191,8 @@ public sealed class FrequencyService
                 var rowIndex = 0;
                 foreach (var row in document.RootElement.EnumerateArray())
                 {
+                    if (collectMetrics)
+                        rowsProcessed++;
                     if ((rowIndex++ & 1023) == 0)
                         cancellationToken.ThrowIfCancellationRequested();
 

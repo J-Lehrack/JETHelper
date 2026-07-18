@@ -18,7 +18,9 @@ public sealed class EnglishDefinitionService
 {
     private readonly YomitanTermDictionaryService termService;
 
-    public EnglishDefinitionService(DictionaryCatalog catalog)
+    public EnglishDefinitionService(
+        DictionaryCatalog catalog,
+        bool collectMetrics)
     {
         var sources = catalog.Select(
                 DictionaryDataKind.TermDefinitions,
@@ -34,7 +36,8 @@ public sealed class EnglishDefinitionService
 
         termService = new YomitanTermDictionaryService(
             "English definitions",
-            sources);
+            sources,
+            collectMetrics);
     }
 
     public bool IsLoaded => termService.IsLoaded;
@@ -45,6 +48,10 @@ public sealed class EnglishDefinitionService
     public IReadOnlyList<string> SourceDictionaryNames
         => termService.SourceDictionaryNames;
     public int EntryCount => termService.EntryCount;
+    public int StoredResultObjectCount
+        => termService.StoredResultObjectCount;
+    public IReadOnlyList<DictionaryLoadMetrics> LoadMetrics
+        => termService.LoadMetrics;
 
     public List<DictionaryDefinition> Lookup(
         string lookupText,

@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using JETHelper.Anki.Models;
+using JETHelper.Benchmarking.Services;
 using JETHelper.Diagnostics.Services;
 using JETHelper.Dictionaries.Catalog;
 using JETHelper.Dictionaries.Inspection;
@@ -27,6 +28,7 @@ public sealed class DictionaryManager : IDisposable
 {
     private readonly Configuration configuration;
     private readonly DiagnosticService diagnostics;
+    private readonly DictionaryBenchmarkService benchmark;
     private readonly object stateLock = new();
     private readonly SemaphoreSlim reloadGate = new(1, 1);
     private readonly HashSet<string> loggedLoaderErrors = new(
@@ -39,11 +41,14 @@ public sealed class DictionaryManager : IDisposable
     private int reloadGeneration;
     private bool disposed;
 
-    public DictionaryManager(Configuration configuration,
-                             DiagnosticService diagnostics)
+    public DictionaryManager(
+        Configuration configuration,
+        DiagnosticService diagnostics,
+        DictionaryBenchmarkService benchmark)
     {
         this.configuration = configuration;
         this.diagnostics = diagnostics;
+        this.benchmark = benchmark;
 
         // Startup discovery must not block plugin construction or the game/UI
         // thread. Until the first snapshot is ready, lookups receive a concise
@@ -95,6 +100,11 @@ public sealed class DictionaryManager : IDisposable
                             + $"configured path={EmptyDash(configuredPath)}; "
                             + $"existing snapshot={hasActiveSnapshot}.");
 
+        benchmark.AttachReload(
+            generation,
+            configuredPath,
+            hasActiveSnapshot);
+
         // Task.Run is intentional here. ZIP discovery, decompression, checksum
         // validation, JSON parsing, and index construction are blocking/CPU work
         // rather than naturally asynchronous I/O.
@@ -102,6 +112,47 @@ public sealed class DictionaryManager : IDisposable
                            generation,
                            configuredPath,
                            cancellation));
+    }
+
+    /// <summary>
+    /// Requests cancellation of the currently active dictionary reload. This is
+    /// exposed only to development benchmark controls; normal users continue to
+    /// receive serialized, non-overlapping reload behavior.
+    /// </summary>
+    public bool CancelActiveReload(out string message)
+    {
+        lock (stateLock)
+        {
+            if (disposed)
+            {
+                message = "Dictionary services have already been disposed.";
+                return false;
+            }
+
+            if (reloadCancellation is null || !reloadStatus.IsActive)
+            {
+                message = "No dictionary reload is currently active.";
+                return false;
+            }
+
+            if (reloadCancellation.IsCancellationRequested)
+            {
+                message = "Dictionary reload cancellation is already pending.";
+                return false;
+            }
+
+            // Cancel while holding stateLock so the worker cannot clear and
+            // dispose this token source between the state check and request.
+            reloadCancellation.Cancel();
+        }
+
+        diagnostics.Information(
+                  "Dictionaries",
+                  "Dictionary reload cancellation was requested through the "
+                            + "development benchmark controls.");
+        message = "Cancellation requested. The active snapshot will remain "
+                  + "available while the benchmark worker stops.";
+        return true;
     }
 
     public DictionaryReloadStatus ReloadStatus
@@ -355,6 +406,7 @@ public sealed class DictionaryManager : IDisposable
             reloadGate.Wait(token);
             gateEntered = true;
             token.ThrowIfCancellationRequested();
+            var benchmarkActive = benchmark.IsTrackingReload(generation);
 
             UpdateReloadStatus(
                       generation,
@@ -369,8 +421,18 @@ public sealed class DictionaryManager : IDisposable
                           HasActiveSnapshot = GetSnapshot() is not null
                       });
 
+            var discoveryStopwatch
+                = benchmarkActive ? Stopwatch.StartNew() : null;
             var candidates = DictionaryPathResolver
                       .FindDictionaryZipCandidates(configuredPath);
+            if (benchmarkActive)
+            {
+                discoveryStopwatch!.Stop();
+                benchmark.RecordDiscoveryCompleted(
+                    generation,
+                    candidates.Count,
+                    discoveryStopwatch.Elapsed);
+            }
             token.ThrowIfCancellationRequested();
 
             UpdateReloadStatus(
@@ -387,6 +449,8 @@ public sealed class DictionaryManager : IDisposable
                       });
 
             var inspected = new List<DictionarySource>(candidates.Count);
+            var validationStopwatch
+                = benchmarkActive ? Stopwatch.StartNew() : null;
 
             for (var index = 0; index < candidates.Count; index++)
             {
@@ -408,9 +472,21 @@ public sealed class DictionaryManager : IDisposable
                               HasActiveSnapshot = GetSnapshot() is not null
                           });
 
-                inspected.Add(YomitanDictionaryInspector.Inspect(
-                          candidate.FilePath,
-                          candidate.Origin));
+                var sourceStopwatch
+                    = benchmarkActive ? Stopwatch.StartNew() : null;
+                var source = YomitanDictionaryInspector.Inspect(
+                    candidate.FilePath,
+                    candidate.Origin);
+                inspected.Add(source);
+
+                if (benchmarkActive)
+                {
+                    sourceStopwatch!.Stop();
+                    benchmark.RecordValidationSource(
+                        generation,
+                        source,
+                        sourceStopwatch.Elapsed);
+                }
 
                 token.ThrowIfCancellationRequested();
 
@@ -429,8 +505,19 @@ public sealed class DictionaryManager : IDisposable
                           });
             }
 
+            if (benchmarkActive)
+            {
+                validationStopwatch!.Stop();
+                benchmark.RecordValidationCompleted(
+                    generation,
+                    inspected.Count,
+                    validationStopwatch.Elapsed);
+            }
+
             var catalog = DictionaryCatalog.FromInspectedSources(inspected);
-            var replacement = new DictionaryRuntimeSnapshot(catalog);
+            var replacement = new DictionaryRuntimeSnapshot(
+                catalog,
+                benchmarkActive);
             token.ThrowIfCancellationRequested();
 
             UpdateReloadStatus(
@@ -444,6 +531,8 @@ public sealed class DictionaryManager : IDisposable
                           HasActiveSnapshot = GetSnapshot() is not null
                       });
 
+            var indexingStopwatch
+                = benchmarkActive ? Stopwatch.StartNew() : null;
             replacement.Preload(
                       token,
                       (processed, total, current) => UpdateReloadStatus(
@@ -461,6 +550,14 @@ public sealed class DictionaryManager : IDisposable
                                                     + $"of {total}.",
                                     HasActiveSnapshot = GetSnapshot() is not null
                                 }));
+            if (benchmarkActive)
+            {
+                indexingStopwatch!.Stop();
+                benchmark.RecordIndexingCompleted(
+                    generation,
+                    replacement.LoadMetrics,
+                    indexingStopwatch.Elapsed);
+            }
 
             token.ThrowIfCancellationRequested();
             var loadErrors = GetLoadErrors(replacement);
@@ -470,13 +567,18 @@ public sealed class DictionaryManager : IDisposable
                               || catalog.RevisionGroups.Count > 0
                               || loadErrors.Count > 0;
 
+            DictionaryRuntimeSnapshot? previousSnapshot;
+            string readyMessage;
+
             lock (stateLock)
             {
                 if (disposed || generation != reloadGeneration)
                     return;
 
+                previousSnapshot = activeSnapshot;
                 activeSnapshot = replacement;
                 loggedLoaderErrors.Clear();
+                readyMessage = BuildReadyMessage(catalog, loadErrors.Count);
                 reloadStatus = new DictionaryReloadStatus
                 {
                     Stage = hasWarnings
@@ -484,14 +586,24 @@ public sealed class DictionaryManager : IDisposable
                                   : DictionaryReloadStage.Ready,
                     ProcessedSources = replacement.IndexingStepCount,
                     TotalSources = replacement.IndexingStepCount,
-                    Message = BuildReadyMessage(catalog, loadErrors.Count),
+                    Message = readyMessage,
                     HasActiveSnapshot = true
                 };
             }
 
+            var replacedSnapshot = previousSnapshot is null
+                ? null
+                : new WeakReference(previousSnapshot);
+            benchmark.RecordActivation(generation, replacedSnapshot);
+            previousSnapshot = null;
+
             stopwatch.Stop();
             LogCatalog(replacement.Catalog, stopwatch.Elapsed);
             LogLoaderErrors(replacement);
+            benchmark.CompleteReload(
+                generation,
+                hasWarnings ? "ready_with_warnings" : "ready",
+                readyMessage);
         }
         catch (OperationCanceledException)
         {
@@ -511,6 +623,11 @@ public sealed class DictionaryManager : IDisposable
             diagnostics.Information(
                       "Dictionaries",
                       $"Dictionary reload generation {generation} was cancelled.");
+            benchmark.CompleteReload(
+                generation,
+                "cancelled",
+                "Dictionary reload was cancelled; the previous snapshot was "
+                + "preserved when available.");
         }
         catch (Exception ex)
         {
@@ -534,6 +651,11 @@ public sealed class DictionaryManager : IDisposable
                                 + "The previous snapshot was preserved when "
                                   + "available.",
                       ex);
+            benchmark.CompleteReload(
+                generation,
+                "failed",
+                "Dictionary reload failed; the previous snapshot was preserved "
+                + "when available.");
         }
         finally
         {
@@ -723,14 +845,24 @@ public sealed class DictionaryManager : IDisposable
     {
         private const int TotalIndexingSteps = 5;
 
-        public DictionaryRuntimeSnapshot(DictionaryCatalog catalog)
+        public DictionaryRuntimeSnapshot(
+            DictionaryCatalog catalog,
+            bool collectMetrics)
         {
             Catalog = catalog;
-            EnglishDefinitions = new EnglishDefinitionService(catalog);
-            KanjiDefinitions = new KanjiDefinitionService(catalog);
-            JapaneseDefinitions = new JapaneseDefinitionService(catalog);
-            SlangDefinitions = new SlangDefinitionService(catalog);
-            Frequency = new FrequencyService(catalog);
+            EnglishDefinitions = new EnglishDefinitionService(
+                catalog,
+                collectMetrics);
+            KanjiDefinitions = new KanjiDefinitionService(
+                catalog,
+                collectMetrics);
+            JapaneseDefinitions = new JapaneseDefinitionService(
+                catalog,
+                collectMetrics);
+            SlangDefinitions = new SlangDefinitionService(
+                catalog,
+                collectMetrics);
+            Frequency = new FrequencyService(catalog, collectMetrics);
         }
 
         public DictionaryCatalog Catalog { get; }
@@ -740,6 +872,13 @@ public sealed class DictionaryManager : IDisposable
         public SlangDefinitionService SlangDefinitions { get; }
         public FrequencyService Frequency { get; }
         public int IndexingStepCount => TotalIndexingSteps;
+        public IReadOnlyList<DictionaryLoadMetrics> LoadMetrics
+            => EnglishDefinitions.LoadMetrics
+                .Concat(JapaneseDefinitions.LoadMetrics)
+                .Concat(SlangDefinitions.LoadMetrics)
+                .Concat(KanjiDefinitions.LoadMetrics)
+                .Concat(Frequency.LoadMetrics)
+                .ToList();
         public bool HasUsableLookupData
             => EnglishDefinitions.EntryCount > 0
                || JapaneseDefinitions.EntryCount > 0

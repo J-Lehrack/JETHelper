@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
@@ -23,18 +24,23 @@ public sealed class YomitanTermDictionaryService
 {
     private readonly string serviceName;
     private readonly IReadOnlyList<DictionarySource> sources;
+    private readonly bool collectMetrics;
     private readonly Dictionary<string, List<DictionaryDefinition>>
         entriesByExpression = new(StringComparer.Ordinal);
     private readonly List<string> sourceDictionaryNames = [];
     private readonly List<string> loadErrors = [];
+    private readonly List<DictionaryLoadMetrics> loadMetrics = [];
+    private int storedResultObjectCount;
     private bool loaded;
 
     public YomitanTermDictionaryService(
         string serviceName,
-        IReadOnlyList<DictionarySource> sources)
+        IReadOnlyList<DictionarySource> sources,
+        bool collectMetrics)
     {
         this.serviceName = serviceName;
         this.sources = sources;
+        this.collectMetrics = collectMetrics;
     }
 
     public bool IsLoaded => loaded;
@@ -44,6 +50,8 @@ public sealed class YomitanTermDictionaryService
     public IReadOnlyList<string> SourceDictionaryNames
         => sourceDictionaryNames;
     public int EntryCount => entriesByExpression.Count;
+    public int StoredResultObjectCount => storedResultObjectCount;
+    public IReadOnlyList<DictionaryLoadMetrics> LoadMetrics => loadMetrics;
 
     /// <summary>
     /// Parses all compatible term banks and builds the lookup index.
@@ -61,9 +69,24 @@ public sealed class YomitanTermDictionaryService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            var stopwatch = collectMetrics ? Stopwatch.StartNew() : null;
+            var keysBefore = entriesByExpression.Count;
+            var resultsBefore = storedResultObjectCount;
+            var errorsBefore = loadErrors.Count;
+            var banksDiscovered = 0;
+            var banksProcessed = 0;
+            var banksSkipped = 0;
+            long rowsProcessed = 0;
+
             try
             {
-                LoadTermZip(source, cancellationToken);
+                LoadTermZip(
+                    source,
+                    cancellationToken,
+                    ref banksDiscovered,
+                    ref banksProcessed,
+                    ref banksSkipped,
+                    ref rowsProcessed);
             }
             catch (OperationCanceledException)
             {
@@ -73,6 +96,30 @@ public sealed class YomitanTermDictionaryService
             {
                 loadErrors.Add(
                     $"{serviceName}: {source.DisplayName}: {ex.Message}");
+            }
+            finally
+            {
+                if (collectMetrics)
+                {
+                    stopwatch!.Stop();
+                    loadMetrics.Add(new DictionaryLoadMetrics
+                    {
+                        ServiceName = serviceName,
+                        SourceName = source.DisplayName,
+                        SourcePath = source.FilePath,
+                        BanksDiscovered = banksDiscovered,
+                        BanksProcessed = banksProcessed,
+                        BanksSkipped = banksSkipped,
+                        RowsProcessed = rowsProcessed,
+                        LookupKeysAdded
+                            = entriesByExpression.Count - keysBefore,
+                        StoredResultObjectsAdded
+                            = storedResultObjectCount - resultsBefore,
+                        ErrorCount = loadErrors.Count - errorsBefore,
+                        DurationMilliseconds
+                            = stopwatch.Elapsed.TotalMilliseconds
+                    });
+                }
             }
         }
 
@@ -218,7 +265,11 @@ public sealed class YomitanTermDictionaryService
 
     private void LoadTermZip(
         DictionarySource source,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ref int banksDiscovered,
+        ref int banksProcessed,
+        ref int banksSkipped,
+        ref long rowsProcessed)
     {
         using var zip = ZipFile.OpenRead(source.FilePath);
         var banks = zip.Entries
@@ -230,6 +281,9 @@ public sealed class YomitanTermDictionaryService
                     ".json",
                     StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+        if (collectMetrics)
+            banksDiscovered = banks.Count;
 
         if (banks.Count == 0)
             return;
@@ -245,11 +299,15 @@ public sealed class YomitanTermDictionaryService
                 loadErrors.Add(
                     $"{serviceName}: {source.DisplayName}/{bank.Name} "
                     + "failed archive validation and was skipped.");
+                if (collectMetrics)
+                    banksSkipped++;
                 continue;
             }
 
             try
             {
+                if (collectMetrics)
+                    banksProcessed++;
                 using var stream = bank.Open();
                 using var document = JsonDocument.Parse(stream);
                 cancellationToken.ThrowIfCancellationRequested();
@@ -264,6 +322,8 @@ public sealed class YomitanTermDictionaryService
                 var rowIndex = 0;
                 foreach (var row in document.RootElement.EnumerateArray())
                 {
+                    if (collectMetrics)
+                        rowsProcessed++;
                     if ((rowIndex++ & 1023) == 0)
                         cancellationToken.ThrowIfCancellationRequested();
 
@@ -277,14 +337,19 @@ public sealed class YomitanTermDictionaryService
                         continue;
                     }
 
-                    Add(definition.Expression, definition);
+                    var retained = Add(
+                        definition.Expression,
+                        definition);
 
                     if (!string.IsNullOrWhiteSpace(definition.Reading)
                         && definition.Reading
                         != definition.Expression)
                     {
-                        Add(definition.Reading, definition);
+                        retained |= Add(definition.Reading, definition);
                     }
+
+                    if (retained && collectMetrics)
+                        storedResultObjectCount++;
                 }
 
                 loadedReadableBank = true;
@@ -310,7 +375,7 @@ public sealed class YomitanTermDictionaryService
         }
     }
 
-    private void Add(string key, DictionaryDefinition definition)
+    private bool Add(string key, DictionaryDefinition definition)
     {
         if (!entriesByExpression.TryGetValue(key, out var list))
         {
@@ -318,14 +383,17 @@ public sealed class YomitanTermDictionaryService
             entriesByExpression[key] = list;
         }
 
-        if (!list.Any(existing =>
+        if (list.Any(existing =>
                 existing.Expression == definition.Expression
                 && existing.Reading == definition.Reading
                 && existing.Meaning == definition.Meaning
                 && existing.SourceDictionary == definition.SourceDictionary))
         {
-            list.Add(definition);
+            return false;
         }
+
+        list.Add(definition);
+        return true;
     }
 
     private static DictionaryDefinition? ParseTermRow(

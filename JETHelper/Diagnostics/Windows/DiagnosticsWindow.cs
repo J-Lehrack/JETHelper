@@ -42,8 +42,7 @@ public sealed class DiagnosticsWindow : Window, IDisposable {
         ImGui.TextWrapped("JETHelper records structured local diagnostics for "
                           + "troubleshooting "
                           + "and bug reports. Lookup text is excluded unless "
-                            + "you explicitly "
-                          + "enable it below.");
+                          + "you explicitly " + "enable it below.");
         ImGui.Spacing();
 
         var loggingEnabled = plugin.Configuration.DiagnosticLoggingEnabled;
@@ -54,8 +53,9 @@ public sealed class DiagnosticsWindow : Window, IDisposable {
                       "Diagnostics",
                       loggingEnabled ? "File logging enabled."
                                      : "File logging disabled. In-memory "
-                                       + "diagnostic events remain available "
-                                       + "for this session.");
+                                                 + "diagnostic events remain "
+                                                 + "available "
+                                                 + "for this session.");
         }
 
         var includeLookupText = plugin.Configuration
@@ -97,6 +97,10 @@ public sealed class DiagnosticsWindow : Window, IDisposable {
                                       : "Could not clear the diagnostic log: "
                                                   + error;
         }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Open Benchmark Tools"))
+            plugin.OpenDictionaryBenchmarkUi();
 
         ImGui.TextDisabled("File logging status: "
                            + (plugin.DiagnosticService.FileLoggingOperational
@@ -158,8 +162,7 @@ public sealed class DiagnosticsWindow : Window, IDisposable {
             ImGui.TextWrapped("One or more dictionary archives could not be "
                               + "read. See the "
                               + "settings inventory for user-facing guidance "
-                                + "and the log for "
-                              + "technical details.");
+                              + "and the log for " + "technical details.");
         }
     }
 

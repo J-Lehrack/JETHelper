@@ -17,7 +17,9 @@ public sealed class SlangDefinitionService
 {
     private readonly YomitanTermDictionaryService termService;
 
-    public SlangDefinitionService(DictionaryCatalog catalog)
+    public SlangDefinitionService(
+        DictionaryCatalog catalog,
+        bool collectMetrics)
     {
         var sources = catalog.Select(
             DictionaryDataKind.TermDefinitions,
@@ -26,7 +28,8 @@ public sealed class SlangDefinitionService
 
         termService = new YomitanTermDictionaryService(
             "Slang and media definitions",
-            sources);
+            sources,
+            collectMetrics);
     }
 
     public string? LoadError => termService.LoadError;
@@ -38,6 +41,10 @@ public sealed class SlangDefinitionService
     public IReadOnlyList<string> SourceDictionaryNames
         => termService.SourceDictionaryNames;
     public int EntryCount => termService.EntryCount;
+    public int StoredResultObjectCount
+        => termService.StoredResultObjectCount;
+    public IReadOnlyList<DictionaryLoadMetrics> LoadMetrics
+        => termService.LoadMetrics;
 
     public List<DictionaryDefinition> Lookup(
         string lookupText,
