@@ -23,49 +23,40 @@ namespace JETHelper;
 /// - Our own services, such as lookup and clipboard handling.
 /// - Our windows, such as the main lookup window and config window.
 /// </summary>
-public sealed class Plugin : IDalamudPlugin
-{
+public sealed class Plugin : IDalamudPlugin {
     // These properties are filled in by Dalamud because of the [PluginService]
     // attribute. The "null!" tells C# that Dalamud will assign these before we
     // use them.
     [PluginService]
-    internal static IDalamudPluginInterface PluginInterface
-    {
+    internal static IDalamudPluginInterface PluginInterface {
         get; private set;
     } = null!;
     [PluginService]
-    internal static ICommandManager CommandManager
-    {
+    internal static ICommandManager CommandManager {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IClientState ClientState
-    {
+    internal static IClientState ClientState {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IPlayerState PlayerState
-    {
+    internal static IPlayerState PlayerState {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IDataManager DataManager
-    {
+    internal static IDataManager DataManager {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IPluginLog Log
-    {
+    internal static IPluginLog Log {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IKeyState KeyState
-    {
+    internal static IKeyState KeyState {
         get; private set;
     } = null!;
     [PluginService]
-    internal static IFramework Framework
-    {
+    internal static IFramework Framework {
         get; private set;
     } = null!;
 
@@ -90,8 +81,7 @@ public sealed class Plugin : IDalamudPlugin
     // Keeping them separate prevents Plugin.cs from becoming a giant catch-all
     // file.
     public DiagnosticService DiagnosticService { get; private set; }
-    public DictionaryBenchmarkService DictionaryBenchmarkService
-    {
+    public DictionaryBenchmarkService DictionaryBenchmarkService {
         get; private set;
     }
     public LookupService LookupService { get; private set; }
@@ -124,39 +114,36 @@ public sealed class Plugin : IDalamudPlugin
                                                   PluginInterface,
                                                   Log);
         DictionaryBenchmarkService = new DictionaryBenchmarkService(
-            PluginInterface,
-            DiagnosticService);
+                  PluginInterface, DiagnosticService);
 
         // A benchmark armed through /jetbenchmark is one-shot. It must be
         // started before LookupService constructs DictionaryManager because the
         // manager immediately requests the startup dictionary reload.
-        if (Configuration.DictionaryBenchmarkNextStartup)
-        {
+        if (Configuration.DictionaryBenchmarkNextStartup) {
             var profile = Configuration.DictionaryBenchmarkProfileLabel;
             var collectGarbage
-                = Configuration.DictionaryBenchmarkCollectGarbageBeforeStart;
+                      = Configuration
+                                  .DictionaryBenchmarkCollectGarbageBeforeStart;
 
             Configuration.DictionaryBenchmarkNextStartup = false;
             Configuration.Save();
 
-            DictionaryBenchmarkService.StartRun(
-                profile,
-                "plugin-startup",
-                collectGarbage,
-                out var benchmarkMessage);
+            DictionaryBenchmarkService.StartRun(profile,
+                                                "plugin-startup",
+                                                collectGarbage,
+                                                out var benchmarkMessage);
             DiagnosticService.Information(
-                "Benchmark",
-                "Next-startup dictionary benchmark was consumed. "
-                + benchmarkMessage);
+                      "Benchmark",
+                      "Next-startup dictionary benchmark was consumed. "
+                                + benchmarkMessage);
         }
 
         // Create the lookup pipeline after configuration is loaded so services
         // can read settings such as the manually configured dictionary folder
         // path.
-        LookupService = new LookupService(
-            Configuration,
-            DiagnosticService,
-            DictionaryBenchmarkService);
+        LookupService = new LookupService(Configuration,
+                                          DiagnosticService,
+                                          DictionaryBenchmarkService);
         AnkiService = new AnkiService(DiagnosticService);
 
         // When the configured key combination is pressed, it calls
@@ -183,24 +170,21 @@ public sealed class Plugin : IDalamudPlugin
         // Register slash commands with Dalamud.
         CommandManager.AddHandler(
                   MainCommandName,
-                  new CommandInfo(OnMainCommand)
-                  {
+                  new CommandInfo(OnMainCommand) {
                       HelpMessage = "Open the JETHelper lookup window. Add "
                                     + "text after the command to process it."
                   });
 
         CommandManager.AddHandler(
                   LookupCommandName,
-                  new CommandInfo(OnLookupCommand)
-                  {
+                  new CommandInfo(OnLookupCommand) {
                       HelpMessage = "Process the text after the command. "
                                     + "Example: /jetlookup 食べる"
                   });
 
         CommandManager.AddHandler(
                   ClipboardCommandName,
-                  new CommandInfo(OnClipboardCommand)
-                  {
+                  new CommandInfo(OnClipboardCommand) {
                       HelpMessage
                       = "Process the current clipboard text. Example flow: "
                         + "copy Japanese text, then run /jetclip"
@@ -208,31 +192,27 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(
                   ConfigCommandName,
-                  new CommandInfo(OnConfigCommand)
-                  {
+                  new CommandInfo(OnConfigCommand) {
                       HelpMessage = "Open the JETHelper settings window."
                   });
 
         CommandManager.AddHandler(
                   CardConfigCommandName,
-                  new CommandInfo(OnCardConfigCommand)
-                  {
+                  new CommandInfo(OnCardConfigCommand) {
                       HelpMessage
                       = "Open the JETHelper Anki card field-mapping window."
                   });
 
         CommandManager.AddHandler(
                   AcknowledgementsCommandName,
-                  new CommandInfo(OnAcknowledgementsCommand)
-                  {
+                  new CommandInfo(OnAcknowledgementsCommand) {
                       HelpMessage = "Open JETHelper acknowledgements, "
                                     + "licences, and data-source information."
                   });
 
         CommandManager.AddHandler(
                   DiagnosticsCommandName,
-                  new CommandInfo(OnDiagnosticsCommand)
-                  {
+                  new CommandInfo(OnDiagnosticsCommand) {
                       HelpMessage
                       = "Open JETHelper diagnostics, service health, "
                         + "and local log controls."
@@ -240,8 +220,7 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(
                   BenchmarkCommandName,
-                  new CommandInfo(OnBenchmarkCommand)
-                  {
+                  new CommandInfo(OnBenchmarkCommand) {
                       HelpMessage
                       = "Open development-only dictionary benchmark controls."
                   });
@@ -301,8 +280,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         // If the user typed "/jet 食べる", process the argument directly.
         // If they typed only "/jet", open/close the lookup window.
-        if (!string.IsNullOrWhiteSpace(args))
-        {
+        if (!string.IsNullOrWhiteSpace(args)) {
             ProcessLookupText(args);
             return;
         }
@@ -377,7 +355,7 @@ public sealed class Plugin : IDalamudPlugin
     public void
     OpenAcknowledgementsUi() => AcknowledgementsWindow.IsOpen = true;
     public void OpenDiagnosticsUi() => DiagnosticsWindow.IsOpen = true;
-    public void OpenDictionaryBenchmarkUi()
-        => DictionaryBenchmarkWindow.IsOpen = true;
+    public void
+    OpenDictionaryBenchmarkUi() => DictionaryBenchmarkWindow.IsOpen = true;
     public void ToggleMainUi() => MainWindow.Toggle();
 }

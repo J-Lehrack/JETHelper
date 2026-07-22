@@ -2,14 +2,14 @@
 
 JETHelper is a Dalamud plugin for Japanese learners playing FINAL FANTASY XIV. It turns copied or manually entered Japanese text into vocabulary and kanji lookup results, then sends selected entries to configurable Anki decks through AnkiConnect.
 
-> **Project status:** Functional alpha. The core lookup-to-Anki workflow, bundled dictionaries, diagnostics, optional Anki note types, non-blocking AnkiConnect operations, background dictionary loading, benchmark instrumentation, and three-machine dictionary performance study are complete. Final lifecycle regression, the planned Jitendex transition, comprehensive deinflection, candidate ranking, and UI refinement remain before a general beta release.
+> **Project status:** Functional alpha. The core lookup-to-Anki workflow, bundled dictionaries, diagnostics, optional Anki note types, non-blocking AnkiConnect operations, background dictionary loading, final lifecycle regression, and three-machine dictionary performance study are complete. Phase 6C is now integrating the selected July 2026 Jitendex archive and Mozc Kanji Variants before the later deinflection, ranking, and UI-refinement phases.
 
 ## Current features
 
 - Manual Japanese text lookup through the in-game window or slash commands.
 - Explicit clipboard lookup through a configurable keyboard shortcut.
 - Vocabulary and individual-kanji candidates that preserve the original sentence context.
-- English, Japanese, slang/media, frequency, reading, and stroke data when supported dictionaries provide it.
+- English, Japanese, slang/media, frequency, reading, stroke, structured grammar/usage, dictionary examples, and kanji-variant data when supported dictionaries provide it.
 - Configurable vocabulary and kanji decks, note types, and field mappings.
 - Anki card creation through AnkiConnect, including duplicate prevention and required-field validation.
 - Optional JETHelper vocabulary and kanji note types with responsive, night-mode-aware styling.
@@ -98,7 +98,11 @@ Jiten Frequency Global
 Mozc Kanji Variants
 ```
 
-Jitendex is intended to **replace**, not accompany, bundled JMdict because the two sources overlap heavily. The transition will occur only after JETHelper supports the selected Jitendex archive's structured definitions, grammar and usage information, examples, pitch data, available audio workflow, attribution, packaging, lookup display, and Anki export.
+Jitendex is intended to **replace**, not accompany, bundled JMdict because the two sources overlap heavily. The selected transition archive is **Jitendex.org [2026-07-09]**, revision `2026.07.09.0`; the selected Mozc archive reports revision `mozc_2022-08-26T22:38:27.927Z`.
+
+JETHelper now parses Jitendex's Yomitan structured-content senses into source-neutral definitions, grammar and usage tags, notes, and attributed example sentences rather than flattening the full content tree into one line. The same loader keeps a compact fallback for ordinary Yomitan term dictionaries. Mozc variant explanations are kept separate from ordinary KANJIDIC meanings so they supplement rather than overwhelm kanji results.
+
+The exact selected Jitendex Yomitan archive does **not** contain `term_meta_bank_` pitch-accent data or audio files/references. Pitch and audio fields therefore remain empty unless a separate approved source is selected later; JETHelper does not infer or fabricate those values. The archive does include local graphical assets, which are not part of the first structured-definition pass.
 
 Generic proper-name dictionaries such as JMnedict are not planned for the default bundle. Their broad real-world name coverage has limited value for FFXIV's largely fictional and game-specific names. Optional name-dictionary support remains a possible specialized feature, but it is not a core lookup or external-browser-text requirement.
 
@@ -171,7 +175,7 @@ The completed combined benchmark dataset contained **63 runs: 61 successful, 2 i
 
 - Deinflection currently handles only a limited set of common conjugations.
 - Vocabulary candidate detection is intentionally permissive and may show substring matches.
-- Jitendex-specific structured grammar, examples, pitch accent, and audio are not yet integrated.
+- Jitendex structured definitions, grammar/usage labels, notes, and dictionary examples are in active regression testing. The selected archive contains no pitch-accent bank or audio media, so those fields remain empty unless a separate approved source is added later.
 - Kanji stroke diagrams are not yet populated.
 - Very large collections can require significant background CPU, memory, and total loading time, especially during replacement reloads where two snapshots temporarily coexist.
 - Direct reading of selected chat text is not implemented; the current workflow uses copied text.
@@ -194,7 +198,7 @@ JETHelper/bin/x64/Debug/JETHelper.dll
 
 ## Roadmap
 
-The next checkpoint is the final responsiveness and lifecycle regression pass. After that, planned work includes the Jitendex/JMdict bundle transition, comprehensive deinflection, candidate ranking, and lookup UI refinement. See [`CHECKLIST.md`](CHECKLIST.md) for the active roadmap and completed-phase history.
+The active checkpoint is Phase 6C: regression-testing structured Jitendex and Mozc support, then completing attribution, packaging, JMdict removal, and the reduced final-profile benchmark. Later work includes comprehensive deinflection, candidate ranking, and lookup UI refinement. See [`CHECKLIST.md`](CHECKLIST.md) for the active roadmap and completed-phase history.
 
 ## License
 
